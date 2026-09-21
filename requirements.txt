@@ -1,0 +1,14 @@
+# RelayFlow pinned stack (Python 3.11+)
+# Compatible set: FastAPI + Pydantic v2 + SQLAlchemy 2.0 async + Celery 5.3+ + Redis 7.x client
+fastapi==0.141.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+sqlalchemy==2.0.53
+greenlet==3.5.6
+asyncpg==0.31.0
+alembic==1.20.0
+celery==5.6.3
+redis==7.4.1
+httpx==0.28.1
+uvicorn==0.53.0

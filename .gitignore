@@ -1,0 +1,34 @@
+# Secrets and local env
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Local working notes (not published)
+docs/changelog.md
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Docker / runtime
+postgres_data/

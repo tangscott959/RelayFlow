@@ -1,0 +1,14 @@
+---
+description: Keep docs/ in sync whenever new RelayFlow code or infra is added.
+alwaysApply: true
+---
+
+# Documentation maintenance
+
+After implementing or changing features, APIs, models, workers, or infra:
+
+1. Append a dated entry to `docs/changelog.md` (local only; this file is gitignored).
+2. Update **Current status** and the **Progress log** in `docs/develop_plan.md` (committed).
+3. Update `docs/architecture.md` if layout, data flow, models, or HTTP routes changed.
+
+All documentation must be written in professional English. Do not leave docs stale relative to the code you just wrote.
