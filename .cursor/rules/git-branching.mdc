@@ -1,0 +1,16 @@
+---
+description: Develop each feature on feature/xxx and merge to main when complete.
+alwaysApply: true
+---
+
+# Feature branch workflow
+
+Do not implement new features on `main`. Use a dedicated branch, then merge back.
+
+1. Update local `main`: `git checkout main` && `git pull --ff-only origin main`.
+2. Create and switch to `feature/<short-kebab-name>` (lowercase, hyphens, no spaces). Examples: `feature/alembic-migrations`, `feature/tenant-auth`.
+3. Commit work only on that branch. Do not commit feature work to `main`.
+4. When the feature is complete: push the branch, open a pull request into `main`, and merge. Delete the feature branch after a successful merge.
+5. Docs-only or tiny rule tweaks that are not a product feature may use `chore/<name>` instead of `feature/<name>`, still not `main`.
+
+Never force-push `main`. Never develop two unrelated features on the same branch.

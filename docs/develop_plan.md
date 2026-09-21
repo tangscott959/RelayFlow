@@ -32,6 +32,7 @@ The live stack was started on 2026-09-15. A circular import between `services` a
 - Backend stack locked: Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async, Celery 5.3+, Redis 7, PostgreSQL 16.
 - Layered layout: `api/`, `core/`, `db/`, `models/`, `schemas/`, `services/`, `workers/`.
 - Comments, docstrings, and documentation must be written in professional English.
+- Git workflow: new features land on `feature/<name>` and merge to `main` via pull request.
 
 ### Phase 1 — Foundation (done)
 
@@ -73,6 +74,8 @@ Keep this section as a running record. Newest entries first. When new code ships
 
 ### 2026-09-21
 
+- Added `README.md` (quick start, API table, layout).
+- Added feature-branch workflow: implement on `feature/<name>`, merge to `main` when done (`.cursor/rules/git-branching.mdc`).
 - Added `docs/` (`develop_plan.md`, `architecture.md`) and a Cursor rule that requires documenting new work.
 - Added `.gitignore`; `docs/changelog.md` is local-only and will not be pushed to GitHub.
 
