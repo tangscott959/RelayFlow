@@ -11,3 +11,4 @@
 - Type Safety: Full type annotations across all files.
 - Language & Documentation: All code comments, docstrings, and documentation must be written in professional English.
 - Docs sync: After shipping new code or infra, update local `docs/changelog.md` (gitignored), plus committed `docs/develop_plan.md` and `docs/architecture.md` when structure or status changes.
+- Git workflow: Implement each new feature on `feature/<short-kebab-name>` (never on `main`). When complete, open a pull request and merge into `main`.
