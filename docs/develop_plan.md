@@ -1,6 +1,6 @@
 # RelayFlow Development Plan
 
-Last updated: 2026-09-21
+Last updated: 2026-10-17
 
 ## Current status
 
@@ -33,6 +33,7 @@ The live stack was started on 2026-09-15. A circular import between `services` a
 - Layered layout: `api/`, `core/`, `db/`, `models/`, `schemas/`, `services/`, `workers/`.
 - Comments, docstrings, and documentation must be written in professional English.
 - Git workflow: new features land on `feature/<name>` and merge to `main` via pull request.
+- Cursor rules (`.cursorrules`, `.cursor/`) and real env files stay local; only `.env.example` is published.
 
 ### Phase 1 — Foundation (done)
 
@@ -71,6 +72,10 @@ The live stack was started on 2026-09-15. A circular import between `services` a
 ## Progress log
 
 Keep this section as a running record. Newest entries first. When new code ships, append a bullet here **and** a dated entry in local `docs/changelog.md` (gitignored, not published). Update [architecture.md](./architecture.md) if structure or data flow changes.
+
+### 2026-10-17
+
+- Stopped tracking `.cursorrules` and `.cursor/` on GitHub; expanded `.gitignore` for env files (`.env`, `.env.*`) while keeping `.env.example`.
 
 ### 2026-09-21
 

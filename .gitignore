@@ -1,9 +1,13 @@
-# Secrets and local env
+# Secrets and local env (keep .env.example as the public template)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.pem
 *.key
+
+# Cursor rules and editor state (local only)
+.cursor/
+.cursorrules
 
 # Local working notes (not published)
 docs/changelog.md
