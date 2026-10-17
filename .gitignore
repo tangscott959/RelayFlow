@@ -11,6 +11,9 @@
 
 # Local working notes (not published)
 docs/changelog.md
+docs/architecture-diagram.*
+docs/RelayFlow_Project_Proposal.pdf
+docs/_generate_proposal_pdf.py
 
 # Python
 .venv/

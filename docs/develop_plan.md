@@ -66,7 +66,7 @@ The contract we are building toward:
 - Backend: Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async, Celery 5.3+, Redis 7, PostgreSQL 16.
 - Frontend (planned): Vite + React + TypeScript in `frontend/`.
 - Git: implement on `feature/<short-kebab-name>` (or `chore/<name>` for tiny non-product work), then PR into `main`.
-- Published docs: `docs/develop_plan.md`, `docs/architecture.md`. Local-only: `.cursorrules`, `.cursor/`, `.env` / `.env.*`, `docs/changelog.md`. Keep `.env.example` in git.
+- Published docs: `docs/develop_plan.md`, `docs/architecture.md`. Local-only: `.cursorrules`, `.cursor/`, `.env` / `.env.*`, `docs/changelog.md`, class proposal PDF and architecture diagram images. Keep `.env.example` in git.
 
 ### Phase 1 — Foundation (done)
 
@@ -122,6 +122,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-10-17
 
+- Keep class proposal PDF and architecture diagram images local (gitignored); submit them outside the repo.
 - Aligned `docs/develop_plan.md` and `docs/architecture.md` with the current product intent, built spine, and Phases 4–6.
 - Stopped tracking `.cursorrules` and `.cursor/` on GitHub; ignore real env files; keep `.env.example`.
 - Scheduled Phase 6: React + TypeScript operator console.
