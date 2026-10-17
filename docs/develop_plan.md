@@ -2,13 +2,31 @@
 
 Last updated: 2026-10-17
 
+## Product intent
+
+RelayFlow is a high-throughput, fault-tolerant webhook gateway (Webhook-as-a-Service) for distributed microservices and long-running Agent / AI workflows, in the same family as Svix and Stripe Webhooks.
+
+The contract we are building toward:
+
+1. Decouple ingest from outbound delivery so slow or failing subscribers cannot block upstream.
+2. Accept events over a low-latency FastAPI REST API (**202 Accepted**).
+3. Queue work asynchronously with **Celery + Redis**.
+4. Persist delivery state and a Dead Letter Queue in **PostgreSQL**.
+5. Enforce **per-tenant token-bucket** rate limiting (ingest and/or outbound).
+6. Guarantee **at-least-once** delivery with **jittered exponential backoff**.
+7. Run **containerized** (Docker Compose today; more replicas later).
+8. Provide an **operator console** (React + TypeScript) so the product is usable without curl.
+9. **Benchmark** horizontal worker scaling under simulated network latency.
+
+---
+
 ## Current status
 
-**Phases 1–3 are complete.** RelayFlow can ingest Agent events, fan out signed webhook deliveries, retry with Full Jitter, and run locally via Docker Compose (web, worker, PostgreSQL 16, Redis 7).
+**Phases 0–3 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker (web, one worker, PostgreSQL 16, Redis 7).
 
-The live stack was started on 2026-09-15. A circular import between `services` and `workers` was fixed so the Celery worker stays up.
+**Not done yet (relative to the product intent):** token-bucket limiting, real tenant auth, Alembic, automated tests, multi-worker scale tests, and the operator UI.
 
-**Next recommended work:** Phase 4 (Alembic migrations, automated tests, and request authentication).
+**Next recommended work:** Phase 4 (migrations, tests, tenant authentication). Phase 6 (console) can start against `/api/v1` with `X-Tenant-ID` if we want UI earlier; prefer it after Phase 4 if the console should use real credentials.
 
 ---
 
@@ -16,83 +34,106 @@ The live stack was started on 2026-09-15. A circular import between `services` a
 
 | Phase | Goal | Status |
 | --- | --- | --- |
-| 0 | Project rules (`.cursorrules`) | Done |
-| 1 | Foundation: config, async DB session, core ORM models | Done |
+| 0 | Local project rules and git workflow | Done (rules stay on this machine) |
+| 1 | Config, async DB session, core ORM models | Done |
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
-| 4 | Migrations, tests, tenant auth | Not started |
-| 5 | Rate limiting, observability, DLQ UI / ops APIs | Not started |
+| 4 | Alembic migrations, automated tests, tenant auth | Not started |
+| 5 | Token-bucket rate limiting, observability, scale benchmarks | Not started |
+| 6 | Operator console (Vite + React + TypeScript) | Not started |
+
+### Mapping to the original description
+
+| Intent | Today |
+| --- | --- |
+| FastAPI REST, ingest decoupled from delivery | Built (`POST /api/v1/events` → 202, Celery) |
+| Celery + Redis queue and cache | Built (broker, result backend, idempotency keys) |
+| PostgreSQL delivery state + DLQ | Built (`delivery_attempts`, `FAILED` + resend API) |
+| At-least-once + jittered exponential backoff | Built (Full Jitter, max 5 automatic tries) |
+| Docker | Built (one web, **one** worker) |
+| HMAC signing (Svix / Stripe style) | Built (`whsec_`, `X-Agent-Signature`) |
+| Per-tenant token-bucket rate limiting | **Not built** (`rate_limit_per_sec` is stored only) |
+| Horizontal worker scale + latency benchmarks | **Not built** |
+| Operator console | **Planned (Phase 6)** |
+| Real multi-tenant auth | **Planned (Phase 4)**; API uses `X-Tenant-ID` |
 
 ---
 
 ## Phase details
 
-### Phase 0 — Project rules
+### Phase 0 — Project rules (done)
 
-- Backend stack locked: Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async, Celery 5.3+, Redis 7, PostgreSQL 16.
-- Layered layout: `api/`, `core/`, `db/`, `models/`, `schemas/`, `services/`, `workers/`.
-- Comments, docstrings, and documentation must be written in professional English.
-- Git workflow: new features land on `feature/<name>` and merge to `main` via pull request.
-- Cursor rules (`.cursorrules`, `.cursor/`) and real env files stay local; only `.env.example` is published.
+- Backend: Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async, Celery 5.3+, Redis 7, PostgreSQL 16.
+- Frontend (planned): Vite + React + TypeScript in `frontend/`.
+- Git: implement on `feature/<short-kebab-name>` (or `chore/<name>` for tiny non-product work), then PR into `main`.
+- Published docs: `docs/develop_plan.md`, `docs/architecture.md`. Local-only: `.cursorrules`, `.cursor/`, `.env` / `.env.*`, `docs/changelog.md`. Keep `.env.example` in git.
 
 ### Phase 1 — Foundation (done)
 
 - Pinned `requirements.txt`.
-- `core/config.py` loads `.env` (`DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`).
-- `db/session.py` provides `create_async_engine` and `AsyncSession`.
+- `core/config.py` from `.env` (`DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`).
+- `db/session.py`: `create_async_engine` + `AsyncSession`.
 - Models: `webhook_endpoints`, `webhook_events`, `delivery_attempts`.
 
 ### Phase 2 — Security and delivery worker (done)
 
-- `services/security.py`: HMAC-SHA256 (`t={timestamp}.{payload}`), replay window, `hmac.compare_digest`.
-- `workers/celery_app.py`: Redis broker/backend, JSON serializer, UTC.
-- `workers/delivery.py`: POST with `httpx.Client(timeout=5.0)`, signed headers, up to 5 attempts, Full Jitter backoff, dead-letter `FAILED`.
+- HMAC-SHA256 over `t={timestamp}.{payload}`; verify with a 300s window and `hmac.compare_digest`.
+- Celery JSON + UTC; Redis broker/backend.
+- Worker POST via `httpx.Client(timeout=5.0)`; Full Jitter backoff; dead-letter `FAILED`.
 
 ### Phase 3 — API and local orchestration (done)
 
-- Pydantic v2 schemas for endpoints, ingest, and paginated deliveries.
-- `services/dispatcher.py`: Redis idempotency, persist event, match `ACTIVE` subscribers, enqueue Celery tasks (15ms budget).
-- REST under `/api/v1` plus `/health`.
-- Multi-stage `Dockerfile` and `docker-compose.yml` (web, worker, postgres, redis).
+- Schemas for endpoints, ingest, paginated deliveries.
+- Dispatcher: Redis idempotency, persist event, match `ACTIVE` subscribers (`event_type` or `*`), enqueue tasks (15ms budget).
+- REST under `/api/v1`, plus `/health`.
+- Multi-stage `Dockerfile` and Compose: `web`, `worker`, `postgres`, `redis`.
 
 ### Phase 4 — Hardening (next)
 
-- Alembic migrations instead of `create_all` on startup.
-- Automated tests for signing, dispatcher idempotency, retry/DLQ, and API contracts.
-- Replace header-only `X-Tenant-ID` with real tenant authentication.
+- Alembic instead of `create_all` on startup.
+- Tests: signing, idempotency, retry/DLQ, API contracts.
+- Replace header-only `X-Tenant-ID` with tenant credentials (tokens or equivalent).
 
-### Phase 5 — Productization (later)
+### Phase 5 — Rate limiting, ops, scale (later)
 
-- Per-endpoint rate limiting (`rate_limit_per_sec`).
+- Redis **token bucket** per tenant (and/or per endpoint using `rate_limit_per_sec`).
 - Metrics, structured logs, tracing.
-- Endpoint pause/disable APIs, delivery filters, webhook payload replay tooling.
+- Pause/disable endpoint APIs, richer delivery filters.
+- Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
+
+### Phase 6 — Operator console (planned)
+
+Vite + React + TypeScript in `frontend/` (never mixed into Python packages). Talks to FastAPI `/api` only — no SQLAlchemy or Celery in the browser.
+
+Screens:
+
+- Endpoint list / create (show `whsec_` once).
+- Event ingest form and 202 result.
+- Paginated delivery log.
+- DLQ resend for `FAILED` attempts.
+
+Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. MVP may send `X-Tenant-ID` until Phase 4 auth exists. Strict TypeScript, functional components, browser-verified flows.
 
 ---
 
 ## Progress log
 
-Keep this section as a running record. Newest entries first. When new code ships, append a bullet here **and** a dated entry in local `docs/changelog.md` (gitignored, not published). Update [architecture.md](./architecture.md) if structure or data flow changes.
+Newest first. Also append local `docs/changelog.md` (gitignored). Update [architecture.md](./architecture.md) when layout or data flow changes.
 
 ### 2026-10-17
 
-- Stopped tracking `.cursorrules` and `.cursor/` on GitHub; expanded `.gitignore` for env files (`.env`, `.env.*`) while keeping `.env.example`.
+- Aligned `docs/develop_plan.md` and `docs/architecture.md` with the current product intent, built spine, and Phases 4–6.
+- Stopped tracking `.cursorrules` and `.cursor/` on GitHub; ignore real env files; keep `.env.example`.
+- Scheduled Phase 6: React + TypeScript operator console.
 
 ### 2026-09-21
 
-- Added `README.md` (quick start, API table, layout).
-- Added feature-branch workflow: implement on `feature/<name>`, merge to `main` when done (`.cursor/rules/git-branching.mdc`).
-- Added `docs/` (`develop_plan.md`, `architecture.md`) and a Cursor rule that requires documenting new work.
-- Added `.gitignore`; `docs/changelog.md` is local-only and will not be pushed to GitHub.
+- README, feature-branch workflow, `docs/` created. `docs/changelog.md` is local-only.
 
 ### 2026-09-15
 
-- Started Docker Desktop and `docker compose up --build`.
-- Fixed circular import: `services/__init__.py` no longer imports the dispatcher; enqueue uses `celery_app.send_task(...)`.
-- Web `/health` returned OK; Celery registered `workers.delivery.deliver_webhook_task`.
+- Docker Compose stack started; worker circular import fixed.
 
 ### 2026-09-14
 
-- Phase 3: API, dispatcher, Docker.
-- Phase 2: signing module and delivery worker. Delivery success status is `DELIVERED`.
-- Phase 1: config, async session, three core models.
-- Phase 0: `.cursorrules`.
+- Phases 0–3 implemented (rules, models, signing/worker, API + Docker).
