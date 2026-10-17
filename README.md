@@ -4,11 +4,13 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–3 are complete: async data model, signed Celery delivery, HTTP API, and Docker Compose. Schema is created on API startup (`create_all`); Alembic migrations and tenant auth are next.
+Phases 1–3 are complete: async data model, signed Celery delivery, HTTP API, and Docker Compose. Schema is created on API startup (`create_all`); Alembic migrations and tenant auth are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
 
 ## Stack
 
-Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async (asyncpg), PostgreSQL 16, Redis 7, Celery 5.3+.
+**Backend:** Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async (asyncpg), PostgreSQL 16, Redis 7, Celery 5.3+.
+
+**Frontend (planned):** Vite, React, TypeScript — operator console in `frontend/` for endpoints, event ingest, delivery logs, and dead-letter resend.
 
 ## Quick start
 
@@ -63,6 +65,7 @@ models/       ORM
 schemas/      Pydantic v2
 services/     Signing and dispatch
 workers/      Celery delivery task
+frontend/     Planned operator console (React + TypeScript)
 docs/         Architecture and development plan
 ```
 
