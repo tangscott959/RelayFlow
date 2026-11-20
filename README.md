@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–3 are complete. Phase 4 is in progress: Alembic applies the schema before the API starts, and HMAC signing has unit tests. Tenant credentials and the rest of the test suite are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
+Phases 1–3 are complete. Phase 4 is in progress: Alembic applies the schema before the API starts, and pytest covers signing, idempotency, retry/DLQ, and API contracts. Tenant credentials are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
 
 ## Stack
 
@@ -25,11 +25,12 @@ The `web` service runs `alembic upgrade head` before uvicorn. If you already use
 docker compose exec web alembic stamp head
 ```
 
-Run signing unit tests on the host:
+Run tests. HMAC and HTTP contract tests run anywhere. Cases marked `integration` need PostgreSQL and Redis (the Compose service network). If a local Postgres already occupies port 5432, run the suite inside `web`:
 
 ```bash
 pip install -r requirements.txt
 pytest
+docker compose exec web pytest
 ```
 
 | Service | URL |

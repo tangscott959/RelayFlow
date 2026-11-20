@@ -11,7 +11,7 @@ This document describes **what is running today**, then **what the plan adds**.
 | Layer | Today | Planned |
 | --- | --- | --- |
 | HTTP API | FastAPI, Pydantic v2 | Tenant auth (Phase 4) |
-| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Remaining Phase 4 tests and tenant auth |
+| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Tenant auth (Phase 4) |
 | Queue / cache | Celery 5.3+, Redis 7 | Token-bucket keys in Redis (Phase 5) |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
@@ -163,7 +163,7 @@ Operator console in `frontend/`:
 ## Known constraints
 
 - Tenant identity is a request header, not authenticated tokens (Phase 4).
-- Automated tests cover HMAC signing; idempotency, retry/DLQ, and API contracts are still Phase 4.
+- pytest covers HMAC signing, idempotency, Full Jitter / DLQ, and API contracts. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
 - `rate_limit_per_sec` is unused; no tenant token bucket (Phase 5).
 - Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
 - No operator UI yet (Phase 6).
