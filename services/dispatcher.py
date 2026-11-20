@@ -15,7 +15,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from core.config import settings
 from models import DeliveryAttempt, DeliveryStatus, EndpointStatus, WebhookEndpoint, WebhookEvent
+from services.rate_limit import RateLimitExceeded, ingest_bucket_key, try_acquire
 from workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -102,6 +104,14 @@ async def dispatch_event(
             duplicate=True,
             attempt_ids=[],
         )
+
+    ingest_limit = await try_acquire(
+        redis,
+        key=ingest_bucket_key(tenant_id),
+        rate_per_sec=settings.ingest_rate_limit_per_sec,
+    )
+    if not ingest_limit.allowed:
+        raise RateLimitExceeded(retry_after=ingest_limit.retry_after, scope="ingest")
 
     event = WebhookEvent(
         tenant_id=tenant_id,

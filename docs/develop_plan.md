@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–4 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker. Schema is versioned with Alembic, pytest covers signing/idempotency/retry/API contracts, and tenants authenticate with `rfk_` API keys.
+**Phases 0–4 are done.** Phase 5 is in progress: Redis token buckets limit ingest per tenant (`INGEST_RATE_LIMIT_PER_SEC`, HTTP 429) and outbound POSTs per endpoint (`rate_limit_per_sec`, deferred retry without consuming the DLQ budget).
 
-**Not done yet (relative to the product intent):** token-bucket limiting, multi-worker scale tests, and the operator UI.
+**Not done yet (relative to the product intent):** observability/tracing, worker replicas and latency benchmarks, and the operator UI.
 
-**Next recommended work:** Phase 5 (Redis token bucket, observability, worker replicas and latency benchmarks). Phase 6 (console) should send `Authorization: Bearer <api_key>`.
+**Next recommended work:** finish Phase 5 (metrics, worker replicas, benchmarks) or start Phase 6 (console with `Authorization: Bearer <api_key>`).
 
 ---
 
@@ -39,7 +39,7 @@ The contract we are building toward:
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
 | 4 | Alembic migrations, automated tests, tenant auth | Done |
-| 5 | Token-bucket rate limiting, observability, scale benchmarks | Not started |
+| 5 | Token-bucket rate limiting, observability, scale benchmarks | In progress (token bucket) |
 | 6 | Operator console (Vite + React + TypeScript) | Not started |
 
 ### Mapping to the original description
@@ -52,7 +52,7 @@ The contract we are building toward:
 | At-least-once + jittered exponential backoff | Built (Full Jitter, max 5 automatic tries) |
 | Docker | Built (one web, **one** worker) |
 | HMAC signing (Svix / Stripe style) | Built (`whsec_`, `X-Agent-Signature`) |
-| Per-tenant token-bucket rate limiting | **Not built** (`rate_limit_per_sec` is stored only) |
+| Per-tenant token-bucket rate limiting | Built (ingest 429; outbound defer using `rate_limit_per_sec`) |
 | Horizontal worker scale + latency benchmarks | **Not built** |
 | Operator console | **Planned (Phase 6)** |
 | Real multi-tenant auth | Built (`POST /api/v1/tenants`, `Authorization: Bearer rfk_...`) |
@@ -94,12 +94,12 @@ The contract we are building toward:
 - HMAC signing, idempotency, retry/DLQ, and API contract tests. Integration cases skip when PostgreSQL or Redis is not running.
 - Tenant credentials: `POST /api/v1/tenants` returns an `rfk_` API key once; business routes use `Authorization: Bearer`. Keys are stored as SHA-256 hashes. `X-Tenant-ID` is no longer accepted.
 
-### Phase 5 — Rate limiting, ops, scale (later)
+### Phase 5 — Rate limiting, ops, scale (in progress)
 
-- Redis **token bucket** per tenant (and/or per endpoint using `rate_limit_per_sec`).
-- Metrics, structured logs, tracing.
-- Pause/disable endpoint APIs, richer delivery filters.
-- Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
+- **Done:** Redis token bucket. Ingest is limited per tenant (`INGEST_RATE_LIMIT_PER_SEC`, default 50/s) with **429** and `Retry-After`. Outbound delivery is limited per endpoint (`rate_limit_per_sec`); a dry bucket defers the same PENDING attempt and does not count toward the five automatic tries.
+- **Next:** metrics, structured logs, tracing.
+- **Next:** pause/disable endpoint APIs, richer delivery filters.
+- **Next:** Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
 
 ### Phase 6 — Operator console (planned)
 
@@ -122,6 +122,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Started Phase 5: Redis token-bucket ingest (per tenant, 429) and outbound delivery (per endpoint `rate_limit_per_sec`, deferred retry).
 - Replaced `X-Tenant-ID` with tenant API keys (`rfk_`, SHA-256 at rest, `Authorization: Bearer`) and Alembic revision `0002_tenants`.
 - Added pytest coverage for Redis/DB idempotency, Full Jitter retry and DLQ threshold, and API contracts (422 validation, 202 ingest, pagination, resend 409/202).
 - Started Phase 4: Alembic async migrations (`migrations/` + `0001_initial`), removed `create_all` from FastAPI lifespan, Compose applies `alembic upgrade head` before uvicorn.

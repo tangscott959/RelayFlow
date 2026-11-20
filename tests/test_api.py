@@ -156,6 +156,63 @@ async def test_ingest_is_idempotent_and_returns_202(
     assert second_body["attempt_count"] == 0
 
 
+async def test_ingest_returns_429_when_rate_limited(
+    authed_contract_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.rate_limit import RateLimitExceeded
+
+    async def _limited(**kwargs: object) -> None:
+        raise RateLimitExceeded(retry_after=2, scope="ingest")
+
+    monkeypatch.setattr("api.v1.events.dispatch_event", _limited)
+    response = await authed_contract_client.post(
+        "/api/v1/events",
+        json={"event_type": "agent.completed", "idempotency_key": "k-limit", "payload": {}},
+    )
+    assert response.status_code == 429
+    assert response.headers.get("retry-after") == "2"
+    assert response.json()["detail"] == "Ingest rate limit exceeded."
+
+
+@pytest.mark.integration
+async def test_ingest_rate_limit_skips_duplicates(
+    api_client: AsyncClient,
+    tenant_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.config import settings
+
+    monkeypatch.setattr(settings, "ingest_rate_limit_per_sec", 1)
+    created = await api_client.post(
+        "/api/v1/endpoints",
+        headers=tenant_headers,
+        json={"target_url": "https://example.com/hooks", "subscribed_events": ["*"]},
+    )
+    assert created.status_code == 201
+    first_payload = {
+        "event_type": "agent.completed",
+        "idempotency_key": f"limit-{uuid.uuid4()}",
+        "payload": {"n": 1},
+    }
+    first = await api_client.post("/api/v1/events", headers=tenant_headers, json=first_payload)
+    assert first.status_code == 202
+    duplicate = await api_client.post("/api/v1/events", headers=tenant_headers, json=first_payload)
+    assert duplicate.status_code == 202
+    assert duplicate.json()["status"] == "duplicate"
+    second = await api_client.post(
+        "/api/v1/events",
+        headers=tenant_headers,
+        json={
+            "event_type": "agent.completed",
+            "idempotency_key": f"limit-{uuid.uuid4()}",
+            "payload": {"n": 2},
+        },
+    )
+    assert second.status_code == 429
+    assert second.headers.get("retry-after") is not None
+
+
 @pytest.mark.integration
 async def test_delivery_log_pagination_and_dlq_resend(
     api_client: AsyncClient,

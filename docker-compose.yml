@@ -47,6 +47,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
       DEBUG: ${DEBUG:-false}
+      INGEST_RATE_LIMIT_PER_SEC: ${INGEST_RATE_LIMIT_PER_SEC:-50}
     depends_on:
       postgres:
         condition: service_healthy

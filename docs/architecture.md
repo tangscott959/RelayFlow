@@ -12,7 +12,7 @@ This document describes **what is running today**, then **what the plan adds**.
 | --- | --- | --- |
 | HTTP API | FastAPI, Pydantic v2, Bearer API keys | Unchanged |
 | ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Unchanged |
-| Queue / cache | Celery 5.3+, Redis 7 | Token-bucket keys in Redis (Phase 5) |
+| Queue / cache | Celery 5.3+, Redis 7, token-bucket keys | Observability (Phase 5) |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
 | UI | None (OpenAPI at `/docs`) | Vite + React + TypeScript in `frontend/` (Phase 6) |
@@ -27,7 +27,7 @@ core/         Settings and Redis client
 db/           Async engine and session factory
 models/       SQLAlchemy 2.0 ORM
 schemas/      Pydantic v2 request/response models
-services/     Signing, tenant API keys, and dispatch
+services/     Signing, tenant API keys, token bucket, and dispatch
 tests/        pytest suite
 workers/      Celery app and delivery task
 main.py       FastAPI app, CORS, /health, /api mount
@@ -83,7 +83,7 @@ One workspace per customer. `api_key_hash` is SHA-256 of the secret `rfk_` key (
 
 ### `webhook_endpoints`
 
-Subscriber callback. `tenant_id` references `tenants.id`. `secret_key` is `whsec_...`. `subscribed_events` is JSONB (`"*"` matches all). Status: `active`, `paused`, `disabled`. `rate_limit_per_sec` is **stored, not enforced**.
+Subscriber callback. `tenant_id` references `tenants.id`. `secret_key` is `whsec_...`. `subscribed_events` is JSONB (`"*"` matches all). Status: `active`, `paused`, `disabled`. `rate_limit_per_sec` is the outbound token-bucket rate.
 
 ### `webhook_events`
 
@@ -121,26 +121,26 @@ Mounted at `/api`. `POST /api/v1/tenants` is public. All other v1 business route
 
 Target: finish the request path within **15ms** (warning if exceeded).
 
-1. Redis GET `relayflow:idempotency:{tenant_id}:{idempotency_key}` — duplicate short-circuit (TTL 24h).
-2. Insert `webhook_events`. Unique-constraint races fall back to the existing row.
-3. Load `ACTIVE` endpoints whose `subscribed_events` contain the `event_type` or `"*"`.
-4. Insert `delivery_attempts` with `PENDING` and `attempt_number=1`.
-5. Commit, then `SET` the Redis idempotency value to the `event_id`.
-6. Publish `workers.delivery.deliver_webhook_task` via `celery_app.send_task` on a thread pool.
-
-Phase 5 should reject or delay ingest/outbound here using a Redis token bucket keyed by tenant (and optionally endpoint).
+1. Redis GET `relayflow:idempotency:{tenant_id}:{idempotency_key}` — duplicate short-circuit (TTL 24h). Duplicates do not consume ingest tokens.
+2. Take one token from `relayflow:ratelimit:ingest:{tenant_id}` (capacity = `INGEST_RATE_LIMIT_PER_SEC`). If empty, raise 429 with `Retry-After`.
+3. Insert `webhook_events`. Unique-constraint races fall back to the existing row.
+4. Load `ACTIVE` endpoints whose `subscribed_events` contain the `event_type` or `"*"`.
+5. Insert `delivery_attempts` with `PENDING` and `attempt_number=1`.
+6. Commit, then `SET` the Redis idempotency value to the `event_id`.
+7. Publish `workers.delivery.deliver_webhook_task` via `celery_app.send_task` on a thread pool.
 
 ## Delivery path (worker)
 
 1. Load attempt + endpoint + event with `selectinload`.
 2. Skip unless status is `PENDING`.
-3. Sign body bytes: HMAC-SHA256 of `t={timestamp}.{payload}`.
-4. POST with `httpx.Client(timeout=5.0)`:
+3. Take one token from `relayflow:ratelimit:endpoint:{endpoint_id}` using `rate_limit_per_sec`. If empty, keep `PENDING`, set `next_retry_at`, and re-enqueue the **same** attempt (does not count toward the five automatic tries).
+4. Sign body bytes: HMAC-SHA256 of `t={timestamp}.{payload}`.
+5. POST with `httpx.Client(timeout=5.0)`:
    - `Content-Type: application/json`
    - `X-Agent-Timestamp: <unix>`
    - `X-Agent-Signature: v1=<hex>`
-5. 2xx → `DELIVERED`.
-6. Error or non-2xx → Full Jitter `random.uniform(0, min(300, 2**(attempt-1)))` seconds. If `attempt_number < 5`, mark `RETRYING` and enqueue the next attempt; otherwise `FAILED`.
+6. 2xx → `DELIVERED`.
+7. Error or non-2xx → Full Jitter `random.uniform(0, min(300, 2**(attempt-1)))` seconds. If `attempt_number < 5`, mark `RETRYING` and enqueue the next attempt; otherwise `FAILED`.
 
 Inbound verification parses `t=...,v1=...`, rejects timestamps outside 300 seconds, and uses `hmac.compare_digest`.
 
@@ -153,6 +153,7 @@ At-least-once: a crash after POST but before commit can duplicate a delivery.
 | `DATABASE_URL` | PostgreSQL DSN; rewritten to `postgresql+asyncpg://` |
 | `REDIS_URL` | Redis 7; default Celery broker and result backend |
 | `SECRET_KEY` | Application secret |
+| `INGEST_RATE_LIMIT_PER_SEC` | Per-tenant ingest token bucket (default 50/s) |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Optional overrides |
 
 Host processes use `.env` (from `.env.example`). Compose injects `postgres` / `redis` DNS names.
@@ -169,7 +170,7 @@ Operator console in `frontend/`:
 ## Known constraints
 
 - pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, and API-key auth. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
-- `rate_limit_per_sec` is unused; no tenant token bucket (Phase 5).
+- Observability (metrics, tracing) is not wired yet (Phase 5).
 - Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
 - No operator UI yet (Phase 6).
 - CORS allows all origins without credentials.
