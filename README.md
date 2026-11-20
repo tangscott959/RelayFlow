@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–4 are complete. Phase 5 is in progress: Redis token-bucket limiting on ingest (per tenant) and outbound delivery (per endpoint `rate_limit_per_sec`). Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
+Phases 1–4 are complete. Phase 5 is in progress: token-bucket limiting plus endpoint pause/disable and delivery status filters. Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
 
 ## Stack
 
@@ -49,9 +49,11 @@ Register a tenant to receive an `rfk_` API key (shown once). Business routes req
 | POST | `/api/v1/tenants` | Create a tenant and return the API key once |
 | GET | `/api/v1/tenants/me` | Current tenant (prefix only, never the secret) |
 | POST | `/api/v1/endpoints` | Create a subscriber endpoint (`whsec_` signing secret) |
-| GET | `/api/v1/endpoints` | List endpoints for the tenant |
+| GET | `/api/v1/endpoints` | List endpoints (`?status=` optional) |
+| GET | `/api/v1/endpoints/{endpoint_id}` | Get one endpoint |
+| PATCH | `/api/v1/endpoints/{endpoint_id}` | Update URL, subscriptions, rate limit, or status (`active` / `paused` / `disabled`) |
 | POST | `/api/v1/events` | Ingest an event (**202 Accepted**) |
-| GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log |
+| GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log (`?status=` optional) |
 | POST | `/api/v1/deliveries/{attempt_id}/resend` | Requeue a `FAILED` (dead-letter) attempt |
 
 Example:

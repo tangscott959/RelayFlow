@@ -5,7 +5,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
+from typing import Self
+
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.enums import EndpointStatus
 
@@ -29,6 +31,33 @@ class EndpointCreate(BaseModel):
             seen.add(event_type)
             events.append(event_type)
         return events
+
+
+class EndpointUpdate(BaseModel):
+    """Partial update for an existing subscriber endpoint."""
+
+    target_url: AnyHttpUrl | None = None
+    subscribed_events: list[str] | None = None
+    rate_limit_per_sec: int | None = Field(default=None, ge=0, le=10_000)
+    status: EndpointStatus | None = None
+
+    @field_validator("subscribed_events")
+    @classmethod
+    def normalize_subscribed_events(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return EndpointCreate.normalize_subscribed_events(value)
+
+    @model_validator(mode="after")
+    def require_at_least_one_field(self) -> Self:
+        if (
+            self.target_url is None
+            and self.subscribed_events is None
+            and self.rate_limit_per_sec is None
+            and self.status is None
+        ):
+            raise ValueError("At least one field is required.")
+        return self
 
 
 class EndpointResponse(BaseModel):

@@ -124,6 +124,80 @@ async def test_endpoint_create_list_and_tenant_isolation(
     assert other_listed.json() == []
 
 
+async def test_patch_endpoint_rejects_empty_body(authed_contract_client: AsyncClient) -> None:
+    response = await authed_contract_client.patch(
+        f"/api/v1/endpoints/{uuid.uuid4()}",
+        json={},
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+async def test_pause_endpoint_stops_new_fan_out(
+    api_client: AsyncClient,
+    tenant_headers: dict[str, str],
+) -> None:
+    created = await api_client.post(
+        "/api/v1/endpoints",
+        headers=tenant_headers,
+        json={"target_url": "https://example.com/hooks", "subscribed_events": ["*"]},
+    )
+    assert created.status_code == 201
+    endpoint_id = created.json()["id"]
+
+    paused = await api_client.patch(
+        f"/api/v1/endpoints/{endpoint_id}",
+        headers=tenant_headers,
+        json={"status": "paused"},
+    )
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+
+    listed = await api_client.get(
+        "/api/v1/endpoints",
+        headers=tenant_headers,
+        params={"status": "paused"},
+    )
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+    ingest = await api_client.post(
+        "/api/v1/events",
+        headers=tenant_headers,
+        json={
+            "event_type": "agent.completed",
+            "idempotency_key": f"paused-{uuid.uuid4()}",
+            "payload": {},
+        },
+    )
+    assert ingest.status_code == 202
+    assert ingest.json()["attempt_count"] == 0
+
+    resumed = await api_client.patch(
+        f"/api/v1/endpoints/{endpoint_id}",
+        headers=tenant_headers,
+        json={"status": "active"},
+    )
+    assert resumed.status_code == 200
+    ingest_again = await api_client.post(
+        "/api/v1/events",
+        headers=tenant_headers,
+        json={
+            "event_type": "agent.completed",
+            "idempotency_key": f"active-{uuid.uuid4()}",
+            "payload": {},
+        },
+    )
+    assert ingest_again.status_code == 202
+    assert ingest_again.json()["attempt_count"] == 1
+
+    missing = await api_client.get(
+        f"/api/v1/endpoints/{uuid.uuid4()}",
+        headers=tenant_headers,
+    )
+    assert missing.status_code == 404
+
+
 @pytest.mark.integration
 async def test_ingest_is_idempotent_and_returns_202(
     api_client: AsyncClient,
@@ -284,6 +358,15 @@ async def test_delivery_log_pagination_and_dlq_resend(
         await session.commit()
         await session.refresh(failed)
         failed_id = failed.id
+
+    failed_page = await api_client.get(
+        f"/api/v1/endpoints/{endpoint_id}/deliveries",
+        headers=tenant_headers,
+        params={"status": "failed"},
+    )
+    assert failed_page.status_code == 200
+    assert failed_page.json()["total"] >= 1
+    assert all(item["status"] == "failed" for item in failed_page.json()["items"])
 
     resent = await api_client.post(
         f"/api/v1/deliveries/{failed_id}/resend",
