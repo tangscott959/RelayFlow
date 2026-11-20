@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–5 are done.** Remaining product work is the operator console (Phase 6).
+**Phases 0–6 are done.** The operator console is in `frontend/` (Compose service on port 5173).
 
-**Not done yet (relative to the product intent):** the operator UI.
+**Not done yet (relative to the product intent):** none of the original contract items remain.
 
-**Next recommended work:** Phase 6 (Vite + React + TypeScript console with `Authorization: Bearer <api_key>`).
+**Next recommended work:** polish the console from operator feedback, or extra ops (auth hardening, hosted Prometheus).
 
 ---
 
@@ -40,7 +40,7 @@ The contract we are building toward:
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
 | 4 | Alembic migrations, automated tests, tenant auth | Done |
 | 5 | Token-bucket rate limiting, observability, scale benchmarks | Done |
-| 6 | Operator console (Vite + React + TypeScript) | Not started |
+| 6 | Operator console (Vite + React + TypeScript) | Done |
 
 ### Mapping to the original description
 
@@ -54,7 +54,7 @@ The contract we are building toward:
 | HMAC signing (Svix / Stripe style) | Built (`whsec_`, `X-Agent-Signature`) |
 | Per-tenant token-bucket rate limiting | Built (ingest 429; outbound defer using `rate_limit_per_sec`) |
 | Horizontal worker scale + latency benchmarks | Built (`--scale worker=N`, delayed sink, `docs/benchmarks.md`) |
-| Operator console | **Planned (Phase 6)** |
+| Operator console | Built (`frontend/`, Compose `:5173`, Bearer API key) |
 | Real multi-tenant auth | Built (`POST /api/v1/tenants`, `Authorization: Bearer rfk_...`) |
 | Observability | Built (JSON logs, `X-Request-ID` / `X-Trace-Id`, `GET /metrics`) |
 
@@ -102,18 +102,19 @@ The contract we are building toward:
 - **Done:** JSON structured logs, request/trace correlation (`X-Request-ID`, `X-Trace-Id`, W3C `traceparent`), and Prometheus `GET /metrics` (HTTP, ingest budget, delivery outcomes in Redis).
 - **Done:** Compose worker replicas (`docker compose up --scale worker=N`, Celery `--concurrency 1`). Delayed sink + `python -m benchmarks.run` under injected latency; see [benchmarks.md](./benchmarks.md).
 
-### Phase 6 — Operator console (planned)
+### Phase 6 — Operator console (done)
 
 Vite + React + TypeScript in `frontend/` (never mixed into Python packages). Talks to FastAPI `/api` only — no SQLAlchemy or Celery in the browser.
 
 Screens:
 
-- Endpoint list / create (show `whsec_` once).
-- Event ingest form and 202 result.
-- Paginated delivery log.
+- Workspace sign-in: create a tenant or paste an `rfk_` key (plaintext key shown once).
+- Endpoint list / create (show `whsec_` once), pause / resume / disable.
+- Event ingest form and 202 result (including duplicates and 429).
+- Paginated delivery log with status filter.
 - DLQ resend for `FAILED` attempts.
 
-Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. The console stores the tenant API key and sends `Authorization: Bearer`. Strict TypeScript, functional components, browser-verified flows.
+Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. The console stores the tenant API key in `localStorage` and sends `Authorization: Bearer`. Strict TypeScript, functional components, browser-verified flows.
 
 ---
 
@@ -123,6 +124,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Added the Vite + React operator console (`frontend/`, Compose `:5173`).
 - Added Compose worker replicas and latency benchmarks (`benchmarks/`, `docs/benchmarks.md`).
 - Added JSON logs, request/trace correlation, and Prometheus `GET /metrics` (HTTP, ingest, delivery).
 - Added endpoint lifecycle APIs (`GET`/`PATCH`, pause/disable) and delivery `?status=` filters.
