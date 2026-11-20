@@ -12,11 +12,11 @@ This document describes **what is running today**, then **what the plan adds**.
 | --- | --- | --- |
 | HTTP API | FastAPI, Pydantic v2, Bearer API keys | Unchanged |
 | ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Unchanged |
-| Queue / cache | Celery 5.3+, Redis 7, token-bucket keys, delivery metric counters | Worker replicas + benchmarks (Phase 5) |
+| Queue / cache | Celery 5.3+, Redis 7, token-bucket keys, delivery metric counters | Unchanged |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
 | UI | None (OpenAPI at `/docs`) | Vite + React + TypeScript in `frontend/` (Phase 6) |
-| Packaging | Docker Compose: web, **1** worker, postgres, redis | Extra `frontend` service; worker replicas + latency benchmarks (Phase 5) |
+| Packaging | Docker Compose: web, scalable workers, postgres, redis; optional `sink` (profile `bench`) | Extra `frontend` service (Phase 6) |
 
 ## Layered layout (today)
 
@@ -30,8 +30,9 @@ schemas/      Pydantic v2 request/response models
 services/     Signing, tenant API keys, token bucket, and dispatch
 tests/        pytest suite
 workers/      Celery app and delivery task
+benchmarks/   Delayed HTTP sink and scale-out runner
 main.py       FastAPI app, CORS, /health, /metrics, /api mount
-docs/         develop_plan.md, architecture.md (committed)
+docs/         develop_plan.md, architecture.md, benchmarks.md (committed)
 ```
 
 Planned: `frontend/` for the operator console. The SPA must call `/api` only. Do not mix UI into Python packages, and do not use SQLAlchemy or Celery from the browser.
@@ -49,22 +50,24 @@ Client  -->  FastAPI (web :8000)
                 v
             Celery broker (Redis)
                 v
-            Celery worker  (single replica)
+            Celery workers  (compose --scale worker=N, concurrency 1)
                 |  HMAC-SHA256 sign
                 v
             Subscriber target_url (POST JSON)
+            Optional: sink service (injected delay, profile bench)
 ```
 
 | Service | Role | Port |
 | --- | --- | --- |
 | `web` | `alembic upgrade head` then uvicorn `main:app` | 8000 |
-| `worker` | `celery -A workers.celery_app worker` | — |
+| `worker` | `celery -A workers.celery_app worker --concurrency 1` (scale with `--scale worker=N`) | — |
 | `postgres` | PostgreSQL 16 | 5432 |
 | `redis` | Redis 7 | 6379 |
+| `sink` | Delayed 200 OK webhook (Compose profile `bench`) | 8089 |
 
 The `web` service applies Alembic migrations (`alembic upgrade head`, revision `0001_initial`) before uvicorn starts. FastAPI lifespan only disposes the engine and Redis client. Celery uses a per-task async engine with `NullPool` so `asyncio.run` in the prefork worker does not share the FastAPI event loop.
 
-### Planned topology (Phases 5–6)
+### Planned topology (Phase 6)
 
 ```
 Browser (frontend :5173)  -->  /api proxy  -->  FastAPI
@@ -72,7 +75,7 @@ Producer / Agent          -->  FastAPI ingest (rate-limited)
                                     v
                               Celery + Redis
                                     v
-                         N worker replicas  -->  subscribers
+                         N worker replicas  -->  subscribers / bench sink
 ```
 
 ## Data model
@@ -160,6 +163,7 @@ JSON logs include `request_id`, `trace_id`, and `tenant_id` when bound. Response
 | `REDIS_URL` | Redis 7; default Celery broker and result backend |
 | `SECRET_KEY` | Application secret |
 | `INGEST_RATE_LIMIT_PER_SEC` | Per-tenant ingest token bucket (default 50/s) |
+| `SINK_DELAY_MS` | Injected subscriber delay for the bench sink (default 200) |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Optional overrides |
 
 Host processes use `.env` (from `.env.example`). Compose injects `postgres` / `redis` DNS names.
@@ -175,8 +179,8 @@ Operator console in `frontend/`:
 
 ## Known constraints
 
-- pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, and API-key auth. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
-- Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
+- pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, API-key auth, and benchmark helpers. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
 - No operator UI yet (Phase 6).
+- Worker-scale numbers live in [benchmarks.md](./benchmarks.md).
 - CORS allows all origins without credentials.
 - Automatic retries stop at five attempts; operators resend DLQ rows through the API.

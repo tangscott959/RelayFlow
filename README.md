@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–4 are complete. Phase 5 is in progress: token-bucket limiting, endpoint pause/disable, and observability (`GET /metrics`, JSON logs, trace ids). Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
+Phases 1–5 are complete. Phase 6 (operator console) remains. See the [development plan](docs/develop_plan.md).
 
 ## Stack
 
@@ -17,6 +17,8 @@ Phases 1–4 are complete. Phase 5 is in progress: token-bucket limiting, endpoi
 ```bash
 cp .env.example .env
 docker compose up --build
+# Horizontal workers (one Celery process per replica):
+docker compose up -d --scale worker=3
 ```
 
 The `web` service runs `alembic upgrade head` before uvicorn. If you already used an older stack that created tables with `create_all`, reset the volume (`docker compose down -v`) or stamp the current revision:
@@ -39,6 +41,7 @@ docker compose exec web pytest
 | OpenAPI docs | http://localhost:8000/docs |
 | Health | http://localhost:8000/health |
 | Metrics | http://localhost:8000/metrics |
+| Bench sink (profile `bench`) | http://localhost:8089/health |
 
 Register a tenant to receive an `rfk_` API key (shown once). Business routes require `Authorization: Bearer <api_key>`.
 
@@ -91,8 +94,9 @@ schemas/      Pydantic v2
 services/     Signing and dispatch
 tests/        pytest suite
 workers/      Celery delivery task
+benchmarks/   Delayed sink and scale-out runner
 frontend/     Planned operator console (React + TypeScript)
-docs/         Architecture and development plan
+docs/         Architecture, development plan, benchmarks
 ```
 
 ## Configuration
@@ -105,10 +109,12 @@ Copy `.env.example`. Compose injects `postgres` / `redis` hostnames; local uvico
 | `REDIS_URL` | Redis; default Celery broker and result backend |
 | `SECRET_KEY` | Application secret |
 | `INGEST_RATE_LIMIT_PER_SEC` | Per-tenant ingest token bucket (default 50/s) |
+| `SINK_DELAY_MS` | Injected delay for the optional bench sink (default 200) |
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
 - [Development plan](docs/develop_plan.md)
+- [Worker-scale benchmarks](docs/benchmarks.md)
 
 New product work lands on `feature/<short-kebab-name>` and merges to `main` through a pull request.
