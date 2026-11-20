@@ -112,9 +112,11 @@ Mounted at `/api`. `POST /api/v1/tenants` is public. All other v1 business route
 | POST | `/api/v1/tenants` | Create tenant, return `rfk_` API key once |
 | GET | `/api/v1/tenants/me` | Current tenant (no secret) |
 | POST | `/api/v1/endpoints` | Create endpoint, return `whsec_` secret |
-| GET | `/api/v1/endpoints` | List tenant endpoints |
+| GET | `/api/v1/endpoints` | List tenant endpoints (`?status=`) |
+| GET | `/api/v1/endpoints/{endpoint_id}` | Get one endpoint |
+| PATCH | `/api/v1/endpoints/{endpoint_id}` | Update URL, subscriptions, rate limit, or `active`/`paused`/`disabled` |
 | POST | `/api/v1/events` | Ingest event, **202 Accepted** |
-| GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log |
+| GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log (`?status=`) |
 | POST | `/api/v1/deliveries/{attempt_id}/resend` | Requeue a FAILED attempt |
 
 ## Ingest path (dispatcher)
@@ -124,7 +126,7 @@ Target: finish the request path within **15ms** (warning if exceeded).
 1. Redis GET `relayflow:idempotency:{tenant_id}:{idempotency_key}` — duplicate short-circuit (TTL 24h). Duplicates do not consume ingest tokens.
 2. Take one token from `relayflow:ratelimit:ingest:{tenant_id}` (capacity = `INGEST_RATE_LIMIT_PER_SEC`). If empty, raise 429 with `Retry-After`.
 3. Insert `webhook_events`. Unique-constraint races fall back to the existing row.
-4. Load `ACTIVE` endpoints whose `subscribed_events` contain the `event_type` or `"*"`.
+4. Load `ACTIVE` endpoints whose `subscribed_events` contain the `event_type` or `"*"`. `paused` and `disabled` endpoints are skipped for new events.
 5. Insert `delivery_attempts` with `PENDING` and `attempt_number=1`.
 6. Commit, then `SET` the Redis idempotency value to the `event_id`.
 7. Publish `workers.delivery.deliver_webhook_task` via `celery_app.send_task` on a thread pool.
@@ -133,14 +135,15 @@ Target: finish the request path within **15ms** (warning if exceeded).
 
 1. Load attempt + endpoint + event with `selectinload`.
 2. Skip unless status is `PENDING`.
-3. Take one token from `relayflow:ratelimit:endpoint:{endpoint_id}` using `rate_limit_per_sec`. If empty, keep `PENDING`, set `next_retry_at`, and re-enqueue the **same** attempt (does not count toward the five automatic tries).
-4. Sign body bytes: HMAC-SHA256 of `t={timestamp}.{payload}`.
-5. POST with `httpx.Client(timeout=5.0)`:
+3. If the endpoint is `paused`, defer the same PENDING attempt (~30s) without consuming a retry. If `disabled`, mark the attempt `FAILED`.
+4. Take one token from `relayflow:ratelimit:endpoint:{endpoint_id}` using `rate_limit_per_sec`. If empty, keep `PENDING`, set `next_retry_at`, and re-enqueue the **same** attempt (does not count toward the five automatic tries).
+5. Sign body bytes: HMAC-SHA256 of `t={timestamp}.{payload}`.
+6. POST with `httpx.Client(timeout=5.0)`:
    - `Content-Type: application/json`
    - `X-Agent-Timestamp: <unix>`
    - `X-Agent-Signature: v1=<hex>`
-6. 2xx → `DELIVERED`.
-7. Error or non-2xx → Full Jitter `random.uniform(0, min(300, 2**(attempt-1)))` seconds. If `attempt_number < 5`, mark `RETRYING` and enqueue the next attempt; otherwise `FAILED`.
+7. 2xx → `DELIVERED`.
+8. Error or non-2xx → Full Jitter `random.uniform(0, min(300, 2**(attempt-1)))` seconds. If `attempt_number < 5`, mark `RETRYING` and enqueue the next attempt; otherwise `FAILED`.
 
 Inbound verification parses `t=...,v1=...`, rejects timestamps outside 300 seconds, and uses `hmac.compare_digest`.
 

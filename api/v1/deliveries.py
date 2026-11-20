@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from api.deps import DbSession, TenantId
 from models import DeliveryAttempt, WebhookEndpoint
+from models.enums import DeliveryStatus
 from schemas.delivery import DeliveryAttemptResponse, PaginatedDeliveryAttemptResponse
 from services.dispatcher import resend_dead_letter
 
@@ -26,6 +27,7 @@ async def list_endpoint_deliveries(
     session: DbSession,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    attempt_status: DeliveryStatus | None = Query(default=None, alias="status"),
 ) -> PaginatedDeliveryAttemptResponse:
     endpoint_stmt = select(WebhookEndpoint).where(
         WebhookEndpoint.id == endpoint_id,
@@ -35,18 +37,20 @@ async def list_endpoint_deliveries(
     if endpoint is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Endpoint not found.")
 
+    filters = [DeliveryAttempt.endpoint_id == endpoint_id]
+    if attempt_status is not None:
+        filters.append(DeliveryAttempt.status == attempt_status)
+
     total = (
         await session.scalar(
-            select(func.count())
-            .select_from(DeliveryAttempt)
-            .where(DeliveryAttempt.endpoint_id == endpoint_id)
+            select(func.count()).select_from(DeliveryAttempt).where(*filters)
         )
         or 0
     )
 
     stmt = (
         select(DeliveryAttempt)
-        .where(DeliveryAttempt.endpoint_id == endpoint_id)
+        .where(*filters)
         .order_by(DeliveryAttempt.created_at.desc(), DeliveryAttempt.attempt_number.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)

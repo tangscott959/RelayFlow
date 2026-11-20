@@ -22,7 +22,7 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–4 are done.** Phase 5 is in progress: Redis token buckets limit ingest per tenant (`INGEST_RATE_LIMIT_PER_SEC`, HTTP 429) and outbound POSTs per endpoint (`rate_limit_per_sec`, deferred retry without consuming the DLQ budget).
+**Phases 0–4 are done.** Phase 5 is in progress: token-bucket limiting, plus endpoint pause/disable (`PATCH`) and delivery `?status=` filters.
 
 **Not done yet (relative to the product intent):** observability/tracing, worker replicas and latency benchmarks, and the operator UI.
 
@@ -97,8 +97,8 @@ The contract we are building toward:
 ### Phase 5 — Rate limiting, ops, scale (in progress)
 
 - **Done:** Redis token bucket. Ingest is limited per tenant (`INGEST_RATE_LIMIT_PER_SEC`, default 50/s) with **429** and `Retry-After`. Outbound delivery is limited per endpoint (`rate_limit_per_sec`); a dry bucket defers the same PENDING attempt and does not count toward the five automatic tries.
+- **Done:** Pause/disable/resume via `PATCH /api/v1/endpoints/{id}` (`active` / `paused` / `disabled`). List endpoints and delivery logs accept `?status=`. Queued deliveries on a paused endpoint are deferred; disabled endpoints fail in-flight attempts.
 - **Next:** metrics, structured logs, tracing.
-- **Next:** pause/disable endpoint APIs, richer delivery filters.
 - **Next:** Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
 
 ### Phase 6 — Operator console (planned)
@@ -122,6 +122,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Added endpoint lifecycle APIs (`GET`/`PATCH`, pause/disable) and delivery `?status=` filters.
 - Started Phase 5: Redis token-bucket ingest (per tenant, 429) and outbound delivery (per endpoint `rate_limit_per_sec`, deferred retry).
 - Replaced `X-Tenant-ID` with tenant API keys (`rfk_`, SHA-256 at rest, `Authorization: Bearer`) and Alembic revision `0002_tenants`.
 - Added pytest coverage for Redis/DB idempotency, Full Jitter retry and DLQ threshold, and API contracts (422 validation, 202 ingest, pagination, resend 409/202).
