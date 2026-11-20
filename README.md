@@ -4,13 +4,13 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–5 are complete. Phase 6 (operator console) remains. See the [development plan](docs/develop_plan.md).
+Phases 1–6 are complete. The operator console is at http://localhost:5173. See the [development plan](docs/develop_plan.md).
 
 ## Stack
 
 **Backend:** Python 3.11+, FastAPI, Pydantic v2, SQLAlchemy 2.0 async (asyncpg), PostgreSQL 16, Redis 7, Celery 5.3+.
 
-**Frontend (planned):** Vite, React, TypeScript — operator console in `frontend/` for endpoints, event ingest, delivery logs, and dead-letter resend.
+**Frontend:** Vite, React, TypeScript — operator console in `frontend/` for endpoints, event ingest, delivery logs, and dead-letter resend.
 
 ## Quick start
 
@@ -42,6 +42,7 @@ docker compose exec web pytest
 | Health | http://localhost:8000/health |
 | Metrics | http://localhost:8000/metrics |
 | Bench sink (profile `bench`) | http://localhost:8089/health |
+| Operator console | http://localhost:5173 |
 
 Register a tenant to receive an `rfk_` API key (shown once). Business routes require `Authorization: Bearer <api_key>`.
 
@@ -95,7 +96,7 @@ services/     Signing and dispatch
 tests/        pytest suite
 workers/      Celery delivery task
 benchmarks/   Delayed sink and scale-out runner
-frontend/     Planned operator console (React + TypeScript)
+frontend/     Operator console (React + TypeScript)
 docs/         Architecture, development plan, benchmarks
 ```
 

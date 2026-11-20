@@ -15,8 +15,8 @@ This document describes **what is running today**, then **what the plan adds**.
 | Queue / cache | Celery 5.3+, Redis 7, token-bucket keys, delivery metric counters | Unchanged |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
-| UI | None (OpenAPI at `/docs`) | Vite + React + TypeScript in `frontend/` (Phase 6) |
-| Packaging | Docker Compose: web, scalable workers, postgres, redis; optional `sink` (profile `bench`) | Extra `frontend` service (Phase 6) |
+| UI | Vite + React + TypeScript console in `frontend/` (`:5173`) | Unchanged |
+| Packaging | Docker Compose: web, scalable workers, frontend, postgres, redis; optional `sink` (profile `bench`) | Unchanged |
 
 ## Layered layout (today)
 
@@ -31,11 +31,12 @@ services/     Signing, tenant API keys, token bucket, and dispatch
 tests/        pytest suite
 workers/      Celery app and delivery task
 benchmarks/   Delayed HTTP sink and scale-out runner
+frontend/     Operator console (Vite + React + TypeScript)
 main.py       FastAPI app, CORS, /health, /metrics, /api mount
 docs/         develop_plan.md, architecture.md, benchmarks.md (committed)
 ```
 
-Planned: `frontend/` for the operator console. The SPA must call `/api` only. Do not mix UI into Python packages, and do not use SQLAlchemy or Celery from the browser.
+The SPA in `frontend/` calls `/api` only (Vite proxies to FastAPI). Do not mix UI into Python packages, and do not use SQLAlchemy or Celery from the browser.
 
 Routers use SQLAlchemy 2.0 `select()` / `AsyncSession` only. Services own transactions and fan-out. Workers must not import `services` package `__init__` in a way that pulls the dispatcher (circular import with `workers.delivery`).
 
@@ -44,17 +45,15 @@ Routers use SQLAlchemy 2.0 `select()` / `AsyncSession` only. Services own transa
 ## Runtime topology (today)
 
 ```
-Client  -->  FastAPI (web :8000)
-                |  persist event + attempts
-                |  Redis idempotency key
-                v
-            Celery broker (Redis)
-                v
-            Celery workers  (compose --scale worker=N, concurrency 1)
-                |  HMAC-SHA256 sign
-                v
-            Subscriber target_url (POST JSON)
-            Optional: sink service (injected delay, profile bench)
+Browser (frontend :5173)  -->  /api proxy  -->  FastAPI (web :8000)
+Producer / Agent          -->  FastAPI ingest
+                                    |  persist event + attempts
+                                    |  Redis idempotency key
+                                    v
+                              Celery broker (Redis)
+                                    v
+                         N worker replicas  -->  subscribers
+                         Optional: sink (profile bench)
 ```
 
 | Service | Role | Port |
@@ -63,20 +62,12 @@ Client  -->  FastAPI (web :8000)
 | `worker` | `celery -A workers.celery_app worker --concurrency 1` (scale with `--scale worker=N`) | — |
 | `postgres` | PostgreSQL 16 | 5432 |
 | `redis` | Redis 7 | 6379 |
+| `frontend` | Vite operator console, `/api` proxied to `web` | 5173 |
 | `sink` | Delayed 200 OK webhook (Compose profile `bench`) | 8089 |
 
 The `web` service applies Alembic migrations (`alembic upgrade head`, revision `0001_initial`) before uvicorn starts. FastAPI lifespan only disposes the engine and Redis client. Celery uses a per-task async engine with `NullPool` so `asyncio.run` in the prefork worker does not share the FastAPI event loop.
 
-### Planned topology (Phase 6)
-
-```
-Browser (frontend :5173)  -->  /api proxy  -->  FastAPI
-Producer / Agent          -->  FastAPI ingest (rate-limited)
-                                    v
-                              Celery + Redis
-                                    v
-                         N worker replicas  -->  subscribers / bench sink
-```
+The console stores the tenant `rfk_` key in `localStorage` and sends `Authorization: Bearer`. Create-tenant responses still show the plaintext key once.
 
 ## Data model
 
@@ -168,7 +159,7 @@ JSON logs include `request_id`, `trace_id`, and `tenant_id` when bound. Response
 
 Host processes use `.env` (from `.env.example`). Compose injects `postgres` / `redis` DNS names.
 
-## Planned frontend (Phase 6)
+## Operator console (Phase 6)
 
 Operator console in `frontend/`:
 
@@ -180,7 +171,6 @@ Operator console in `frontend/`:
 ## Known constraints
 
 - pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, API-key auth, and benchmark helpers. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
-- No operator UI yet (Phase 6).
 - Worker-scale numbers live in [benchmarks.md](./benchmarks.md).
 - CORS allows all origins without credentials.
 - Automatic retries stop at five attempts; operators resend DLQ rows through the API.

@@ -99,6 +99,20 @@ services:
     # Scale horizontally: docker compose up --scale worker=3
     # container_name is omitted so Compose can create more than one replica.
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: relayflow-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      API_PROXY_TARGET: http://web:8000
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
   sink:
     profiles: ["bench"]
     build:
