@@ -20,34 +20,46 @@ async def test_health_ok(contract_client: AsyncClient) -> None:
     assert body["service"] == "RelayFlow"
 
 
-async def test_business_routes_require_tenant_header(contract_client: AsyncClient) -> None:
+async def test_business_routes_require_bearer_token(contract_client: AsyncClient) -> None:
     response = await contract_client.get("/api/v1/endpoints")
-    assert response.status_code == 422
+    assert response.status_code == 401
+    assert response.headers.get("www-authenticate") == "Bearer"
 
 
-async def test_invalid_tenant_header_is_rejected(contract_client: AsyncClient) -> None:
+async def test_malformed_api_key_is_rejected(contract_client: AsyncClient) -> None:
     response = await contract_client.get(
         "/api/v1/endpoints",
-        headers={"X-Tenant-ID": "not-a-uuid"},
+        headers={"Authorization": "Bearer not-an-api-key"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
-async def test_ingest_rejects_blank_event_type(contract_client: AsyncClient) -> None:
-    response = await contract_client.post(
+async def test_unknown_api_key_is_rejected(contract_client: AsyncClient) -> None:
+    response = await contract_client.get(
+        "/api/v1/endpoints",
+        headers={"Authorization": "Bearer rfk_unknown_token_value"},
+    )
+    assert response.status_code == 401
+
+
+async def test_ingest_rejects_blank_event_type(authed_contract_client: AsyncClient) -> None:
+    response = await authed_contract_client.post(
         "/api/v1/events",
-        headers={"X-Tenant-ID": str(uuid.uuid4())},
         json={"event_type": "   ", "idempotency_key": "k1", "payload": {}},
     )
     assert response.status_code == 422
 
 
-async def test_create_endpoint_rejects_invalid_url(contract_client: AsyncClient) -> None:
-    response = await contract_client.post(
+async def test_create_endpoint_rejects_invalid_url(authed_contract_client: AsyncClient) -> None:
+    response = await authed_contract_client.post(
         "/api/v1/endpoints",
-        headers={"X-Tenant-ID": str(uuid.uuid4())},
         json={"target_url": "not-a-url", "subscribed_events": ["*"]},
     )
+    assert response.status_code == 422
+
+
+async def test_register_tenant_rejects_blank_name(contract_client: AsyncClient) -> None:
+    response = await contract_client.post("/api/v1/tenants", json={"name": "   "})
     assert response.status_code == 422
 
 
@@ -62,6 +74,20 @@ def test_event_ingest_schema_strips_and_rejects_blank() -> None:
 
     with pytest.raises(ValidationError):
         EventIngestRequest(event_type=" ", idempotency_key="k", payload={})
+
+
+@pytest.mark.integration
+async def test_register_tenant_and_read_me(
+    api_client: AsyncClient,
+    registered_tenant: dict[str, str],
+    tenant_headers: dict[str, str],
+) -> None:
+    me = await api_client.get("/api/v1/tenants/me", headers=tenant_headers)
+    assert me.status_code == 200
+    body = me.json()
+    assert body["id"] == registered_tenant["id"]
+    assert body["api_key_prefix"] == registered_tenant["api_key_prefix"]
+    assert "api_key" not in body
 
 
 @pytest.mark.integration
@@ -88,12 +114,14 @@ async def test_endpoint_create_list_and_tenant_isolation(
     assert listed.status_code == 200
     assert len(listed.json()) == 1
 
-    other = await api_client.get(
+    other = await api_client.post("/api/v1/tenants", json={"name": "other-tenant"})
+    assert other.status_code == 201
+    other_listed = await api_client.get(
         "/api/v1/endpoints",
-        headers={"X-Tenant-ID": str(uuid.uuid4())},
+        headers={"Authorization": f"Bearer {other.json()['api_key']}"},
     )
-    assert other.status_code == 200
-    assert other.json() == []
+    assert other_listed.status_code == 200
+    assert other_listed.json() == []
 
 
 @pytest.mark.integration
@@ -132,7 +160,7 @@ async def test_ingest_is_idempotent_and_returns_202(
 async def test_delivery_log_pagination_and_dlq_resend(
     api_client: AsyncClient,
     tenant_headers: dict[str, str],
-    tenant_id: uuid.UUID,
+    registered_tenant_id: uuid.UUID,
 ) -> None:
     from db.session import AsyncSessionLocal
 
@@ -182,7 +210,7 @@ async def test_delivery_log_pagination_and_dlq_resend(
 
     async with AsyncSessionLocal() as session:
         event = WebhookEvent(
-            tenant_id=tenant_id,
+            tenant_id=registered_tenant_id,
             event_type="agent.completed",
             idempotency_key=f"dlq-{uuid.uuid4()}",
             payload={"dead": True},

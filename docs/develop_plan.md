@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–3 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker (web, one worker, PostgreSQL 16, Redis 7). **Phase 4 is in progress:** Alembic replaces `create_all`; pytest covers signing, idempotency, retry/DLQ, and API contracts.
+**Phases 0–4 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker. Schema is versioned with Alembic, pytest covers signing/idempotency/retry/API contracts, and tenants authenticate with `rfk_` API keys.
 
-**Not done yet (relative to the product intent):** real tenant auth, token-bucket limiting, multi-worker scale tests, and the operator UI.
+**Not done yet (relative to the product intent):** token-bucket limiting, multi-worker scale tests, and the operator UI.
 
-**Next recommended work:** finish Phase 4 with tenant credentials in place of header-only `X-Tenant-ID`. Phase 6 (console) can start against `/api/v1` with `X-Tenant-ID` if we want UI earlier; prefer it after Phase 4 if the console should use real credentials.
+**Next recommended work:** Phase 5 (Redis token bucket, observability, worker replicas and latency benchmarks). Phase 6 (console) should send `Authorization: Bearer <api_key>`.
 
 ---
 
@@ -38,7 +38,7 @@ The contract we are building toward:
 | 1 | Config, async DB session, core ORM models | Done |
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
-| 4 | Alembic migrations, automated tests, tenant auth | In progress (Alembic + tests; auth remaining) |
+| 4 | Alembic migrations, automated tests, tenant auth | Done |
 | 5 | Token-bucket rate limiting, observability, scale benchmarks | Not started |
 | 6 | Operator console (Vite + React + TypeScript) | Not started |
 
@@ -55,7 +55,7 @@ The contract we are building toward:
 | Per-tenant token-bucket rate limiting | **Not built** (`rate_limit_per_sec` is stored only) |
 | Horizontal worker scale + latency benchmarks | **Not built** |
 | Operator console | **Planned (Phase 6)** |
-| Real multi-tenant auth | **Planned (Phase 4)**; API uses `X-Tenant-ID` |
+| Real multi-tenant auth | Built (`POST /api/v1/tenants`, `Authorization: Bearer rfk_...`) |
 
 ---
 
@@ -88,12 +88,11 @@ The contract we are building toward:
 - REST under `/api/v1`, plus `/health`.
 - Multi-stage `Dockerfile` and Compose: `web`, `worker`, `postgres`, `redis`.
 
-### Phase 4 — Hardening (in progress)
+### Phase 4 — Hardening (done)
 
-- **Done:** Alembic instead of `create_all` on startup. Compose `web` runs `alembic upgrade head` before uvicorn. Scripts live in `migrations/` (not `alembic/`, which would shadow the Alembic package under `PYTHONPATH=/app`). Initial revision `0001_initial` creates the three tables and PostgreSQL enums.
-- **Done:** HMAC signing unit tests (`tests/test_security.py`).
-- **Done:** Idempotency, retry/DLQ, and API contract tests (`tests/test_dispatcher.py`, `tests/test_delivery.py`, `tests/test_api.py`). Integration cases skip when PostgreSQL or Redis is not running.
-- **Next:** replace header-only `X-Tenant-ID` with tenant credentials (tokens or equivalent).
+- Alembic instead of `create_all` on startup. Compose `web` runs `alembic upgrade head` before uvicorn. Scripts live in `migrations/` (not `alembic/`, which would shadow the Alembic package under `PYTHONPATH=/app`). Revisions `0001_initial` and `0002_tenants`.
+- HMAC signing, idempotency, retry/DLQ, and API contract tests. Integration cases skip when PostgreSQL or Redis is not running.
+- Tenant credentials: `POST /api/v1/tenants` returns an `rfk_` API key once; business routes use `Authorization: Bearer`. Keys are stored as SHA-256 hashes. `X-Tenant-ID` is no longer accepted.
 
 ### Phase 5 — Rate limiting, ops, scale (later)
 
@@ -113,7 +112,7 @@ Screens:
 - Paginated delivery log.
 - DLQ resend for `FAILED` attempts.
 
-Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. MVP may send `X-Tenant-ID` until Phase 4 auth exists. Strict TypeScript, functional components, browser-verified flows.
+Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. The console stores the tenant API key and sends `Authorization: Bearer`. Strict TypeScript, functional components, browser-verified flows.
 
 ---
 
@@ -123,6 +122,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Replaced `X-Tenant-ID` with tenant API keys (`rfk_`, SHA-256 at rest, `Authorization: Bearer`) and Alembic revision `0002_tenants`.
 - Added pytest coverage for Redis/DB idempotency, Full Jitter retry and DLQ threshold, and API contracts (422 validation, 202 ingest, pagination, resend 409/202).
 - Started Phase 4: Alembic async migrations (`migrations/` + `0001_initial`), removed `create_all` from FastAPI lifespan, Compose applies `alembic upgrade head` before uvicorn.
 - Added pytest and HMAC signing unit tests.

@@ -10,8 +10,8 @@ This document describes **what is running today**, then **what the plan adds**.
 
 | Layer | Today | Planned |
 | --- | --- | --- |
-| HTTP API | FastAPI, Pydantic v2 | Tenant auth (Phase 4) |
-| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Tenant auth (Phase 4) |
+| HTTP API | FastAPI, Pydantic v2, Bearer API keys | Unchanged |
+| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Unchanged |
 | Queue / cache | Celery 5.3+, Redis 7 | Token-bucket keys in Redis (Phase 5) |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
@@ -27,7 +27,7 @@ core/         Settings and Redis client
 db/           Async engine and session factory
 models/       SQLAlchemy 2.0 ORM
 schemas/      Pydantic v2 request/response models
-services/     Signing and dispatch
+services/     Signing, tenant API keys, and dispatch
 tests/        pytest suite
 workers/      Celery app and delivery task
 main.py       FastAPI app, CORS, /health, /api mount
@@ -77,13 +77,17 @@ Producer / Agent          -->  FastAPI ingest (rate-limited)
 
 ## Data model
 
+### `tenants`
+
+One workspace per customer. `api_key_hash` is SHA-256 of the secret `rfk_` key (unique). `api_key_prefix` is the first 12 characters, shown after create. The plaintext key is returned only from `POST /api/v1/tenants`.
+
 ### `webhook_endpoints`
 
-Subscriber callback. `secret_key` is `whsec_...`. `subscribed_events` is JSONB (`"*"` matches all). Status: `active`, `paused`, `disabled`. `rate_limit_per_sec` is **stored, not enforced**.
+Subscriber callback. `tenant_id` references `tenants.id`. `secret_key` is `whsec_...`. `subscribed_events` is JSONB (`"*"` matches all). Status: `active`, `paused`, `disabled`. `rate_limit_per_sec` is **stored, not enforced**.
 
 ### `webhook_events`
 
-One row per ingest. Unique `(tenant_id, idempotency_key)`. `payload` is JSONB.
+One row per ingest. `tenant_id` references `tenants.id`. Unique `(tenant_id, idempotency_key)`. `payload` is JSONB.
 
 ### `delivery_attempts`
 
@@ -100,11 +104,13 @@ Manual resend of `failed` inserts a new `pending` row with `attempt_number = max
 
 ## HTTP API (today)
 
-All v1 business routes require header `X-Tenant-ID` (UUID). Mounted at `/api`.
+Mounted at `/api`. `POST /api/v1/tenants` is public. All other v1 business routes require `Authorization: Bearer <rfk_...>`. Tenant identity is derived from the hashed key, not a client-supplied id.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/health` | Liveness probe |
+| POST | `/api/v1/tenants` | Create tenant, return `rfk_` API key once |
+| GET | `/api/v1/tenants/me` | Current tenant (no secret) |
 | POST | `/api/v1/endpoints` | Create endpoint, return `whsec_` secret |
 | GET | `/api/v1/endpoints` | List tenant endpoints |
 | POST | `/api/v1/events` | Ingest event, **202 Accepted** |
@@ -158,12 +164,11 @@ Operator console in `frontend/`:
 - Vite + React + TypeScript.
 - Endpoints, ingest, delivery logs, DLQ resend against `/api/v1`.
 - Compose service on port 5173, `/api` proxied to `web`.
-- Until Phase 4, the UI may collect `X-Tenant-ID`.
+- The UI stores the tenant API key and sends `Authorization: Bearer`.
 
 ## Known constraints
 
-- Tenant identity is a request header, not authenticated tokens (Phase 4).
-- pytest covers HMAC signing, idempotency, Full Jitter / DLQ, and API contracts. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
+- pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, and API-key auth. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
 - `rate_limit_per_sec` is unused; no tenant token bucket (Phase 5).
 - Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
 - No operator UI yet (Phase 6).

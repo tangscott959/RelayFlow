@@ -20,17 +20,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from tests.fakes import InMemoryRedis
+from tests.fakes import DummySession, InMemoryRedis
 
 
 @pytest.fixture
 def tenant_id() -> uuid.UUID:
     return uuid.uuid4()
-
-
-@pytest.fixture
-def tenant_headers(tenant_id: uuid.UUID) -> dict[str, str]:
-    return {"X-Tenant-ID": str(tenant_id)}
 
 
 @pytest.fixture
@@ -53,8 +48,8 @@ async def contract_client(asgi_app) -> AsyncIterator[AsyncClient]:
     from core.redis import get_redis
     from db.session import get_async_session
 
-    async def _session() -> AsyncIterator[object]:
-        yield object()
+    async def _session() -> AsyncIterator[DummySession]:
+        yield DummySession()
 
     async def _redis() -> AsyncIterator[object]:
         yield object()
@@ -66,6 +61,19 @@ async def contract_client(asgi_app) -> AsyncIterator[AsyncClient]:
         base_url="http://test",
     ) as client:
         yield client
+
+
+@pytest.fixture
+async def authed_contract_client(asgi_app, contract_client: AsyncClient) -> AsyncIterator[AsyncClient]:
+    """Contract client that skips API-key lookup for request-body validation tests."""
+
+    from api.deps import get_current_tenant_id
+
+    async def _tenant_id() -> uuid.UUID:
+        return uuid.uuid4()
+
+    asgi_app.dependency_overrides[get_current_tenant_id] = _tenant_id
+    yield contract_client
 
 
 @pytest.fixture
@@ -88,6 +96,28 @@ async def require_backend() -> None:
 
 
 @pytest.fixture
+async def persisted_tenant_id(require_backend: None, tenant_id: uuid.UUID) -> uuid.UUID:
+    """Insert a tenant row so FK-backed endpoint/event seeds can commit."""
+
+    from db.session import AsyncSessionLocal
+    from models import Tenant
+    from services.tenants import api_key_display_prefix, generate_api_key, hash_api_key
+
+    raw_key = generate_api_key()
+    async with AsyncSessionLocal() as session:
+        session.add(
+            Tenant(
+                id=tenant_id,
+                name="fixture-tenant",
+                api_key_hash=hash_api_key(raw_key),
+                api_key_prefix=api_key_display_prefix(raw_key),
+            )
+        )
+        await session.commit()
+    return tenant_id
+
+
+@pytest.fixture
 async def api_client(
     asgi_app,
     require_backend: None,
@@ -101,3 +131,25 @@ async def api_client(
         base_url="http://test",
     ) as client:
         yield client
+
+
+@pytest.fixture
+async def registered_tenant(api_client: AsyncClient) -> dict[str, str]:
+    response = await api_client.post(
+        "/api/v1/tenants",
+        json={"name": f"tenant-{uuid.uuid4().hex[:8]}"},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["api_key"].startswith("rfk_")
+    return body
+
+
+@pytest.fixture
+def tenant_headers(registered_tenant: dict[str, str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {registered_tenant['api_key']}"}
+
+
+@pytest.fixture
+def registered_tenant_id(registered_tenant: dict[str, str]) -> uuid.UUID:
+    return uuid.UUID(registered_tenant["id"])
