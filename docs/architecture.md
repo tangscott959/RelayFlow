@@ -1,6 +1,6 @@
 # RelayFlow Architecture
 
-Last updated: 2026-10-17
+Last updated: 2026-11-20
 
 RelayFlow is a multi-tenant webhook gateway. Producers ingest events over HTTP; RelayFlow persists them once, queues outbound work, and delivers signed POSTs to subscriber URLs with retries and a dead-letter path so slow downstreams do not block upstream Agent or microservice pipelines.
 
@@ -11,7 +11,7 @@ This document describes **what is running today**, then **what the plan adds**.
 | Layer | Today | Planned |
 | --- | --- | --- |
 | HTTP API | FastAPI, Pydantic v2 | Tenant auth (Phase 4) |
-| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16 | Alembic migrations (Phase 4) |
+| ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Remaining Phase 4 tests and tenant auth |
 | Queue / cache | Celery 5.3+, Redis 7 | Token-bucket keys in Redis (Phase 5) |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
@@ -22,11 +22,13 @@ This document describes **what is running today**, then **what the plan adds**.
 
 ```
 api/          HTTP routers and dependencies
+migrations/   Async Alembic env and revision scripts
 core/         Settings and Redis client
 db/           Async engine and session factory
 models/       SQLAlchemy 2.0 ORM
 schemas/      Pydantic v2 request/response models
 services/     Signing and dispatch
+tests/        pytest suite
 workers/      Celery app and delivery task
 main.py       FastAPI app, CORS, /health, /api mount
 docs/         develop_plan.md, architecture.md (committed)
@@ -55,12 +57,12 @@ Client  -->  FastAPI (web :8000)
 
 | Service | Role | Port |
 | --- | --- | --- |
-| `web` | uvicorn `main:app` | 8000 |
+| `web` | `alembic upgrade head` then uvicorn `main:app` | 8000 |
 | `worker` | `celery -A workers.celery_app worker` | — |
 | `postgres` | PostgreSQL 16 | 5432 |
 | `redis` | Redis 7 | 6379 |
 
-On web startup, `Base.metadata.create_all` creates tables. Celery uses a per-task async engine with `NullPool` so `asyncio.run` in the prefork worker does not share the FastAPI event loop.
+The `web` service applies Alembic migrations (`alembic upgrade head`, revision `0001_initial`) before uvicorn starts. FastAPI lifespan only disposes the engine and Redis client. Celery uses a per-task async engine with `NullPool` so `asyncio.run` in the prefork worker does not share the FastAPI event loop.
 
 ### Planned topology (Phases 5–6)
 
@@ -161,8 +163,7 @@ Operator console in `frontend/`:
 ## Known constraints
 
 - Tenant identity is a request header, not authenticated tokens (Phase 4).
-- Schema is `create_all`, not Alembic (Phase 4).
-- No automated test suite (Phase 4).
+- Automated tests cover HMAC signing; idempotency, retry/DLQ, and API contracts are still Phase 4.
 - `rate_limit_per_sec` is unused; no tenant token bucket (Phase 5).
 - Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
 - No operator UI yet (Phase 6).

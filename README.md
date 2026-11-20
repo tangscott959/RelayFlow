@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–3 are complete: async data model, signed Celery delivery, HTTP API, and Docker Compose. Schema is created on API startup (`create_all`); Alembic migrations and tenant auth are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
+Phases 1–3 are complete. Phase 4 is in progress: Alembic applies the schema before the API starts, and HMAC signing has unit tests. Tenant credentials and the rest of the test suite are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
 
 ## Stack
 
@@ -17,6 +17,19 @@ Phases 1–3 are complete: async data model, signed Celery delivery, HTTP API, a
 ```bash
 cp .env.example .env
 docker compose up --build
+```
+
+The `web` service runs `alembic upgrade head` before uvicorn. If you already used an older stack that created tables with `create_all`, reset the volume (`docker compose down -v`) or stamp the current revision:
+
+```bash
+docker compose exec web alembic stamp head
+```
+
+Run signing unit tests on the host:
+
+```bash
+pip install -r requirements.txt
+pytest
 ```
 
 | Service | URL |
@@ -59,11 +72,13 @@ Failed deliveries retry up to 5 times with Full Jitter backoff, then move to `FA
 
 ```
 api/          HTTP routers
+migrations/   Alembic revision scripts
 core/         Settings and Redis
 db/           Async SQLAlchemy session
 models/       ORM
 schemas/      Pydantic v2
 services/     Signing and dispatch
+tests/        pytest suite
 workers/      Celery delivery task
 frontend/     Planned operator console (React + TypeScript)
 docs/         Architecture and development plan

@@ -12,14 +12,15 @@ from api.v1.router import api_router
 from core.config import settings
 from core.redis import close_redis
 from db.session import engine
-from models import Base
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Create ORM tables on boot and dispose pooled connections on shutdown."""
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    """Dispose pooled connections and the Redis client on shutdown.
+
+    Schema changes are applied by Alembic (`alembic upgrade head`) before the
+    API process starts, not via ``create_all`` here.
+    """
     yield
     await engine.dispose()
     await close_redis()
