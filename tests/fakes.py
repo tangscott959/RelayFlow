@@ -38,3 +38,8 @@ class InMemoryRedis:
 
     async def set(self, key: str, value: str, ex: int | None = None) -> None:
         self.values[key] = value
+
+    async def incr(self, key: str, amount: int = 1) -> int:
+        next_value = int(self.values.get(key, "0")) + amount
+        self.values[key] = str(next_value)
+        return next_value
