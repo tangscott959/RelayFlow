@@ -7,6 +7,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from redis.asyncio import Redis
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from core.config import settings
+from core.metrics import record_ingest
+from core.tracing import get_trace_id
 from models import DeliveryAttempt, DeliveryStatus, EndpointStatus, WebhookEndpoint, WebhookEvent
 from services.rate_limit import RateLimitExceeded, ingest_bucket_key, try_acquire
 from workers.celery_app import celery_app
@@ -37,9 +40,16 @@ def _idempotency_redis_key(tenant_id: uuid.UUID, idempotency_key: str) -> str:
     return f"relayflow:idempotency:{tenant_id}:{idempotency_key}"
 
 
-def _enqueue_delivery(attempt_id: str) -> None:
+def _enqueue_delivery(attempt_id: str, trace_id: str = "") -> None:
     """Publish a delivery task by name to avoid a workers <-> services import cycle."""
-    celery_app.send_task("workers.delivery.deliver_webhook_task", args=[attempt_id])
+    kwargs: dict[str, str] = {}
+    if trace_id:
+        kwargs["trace_id"] = trace_id
+    celery_app.send_task(
+        "workers.delivery.deliver_webhook_task",
+        args=[attempt_id],
+        kwargs=kwargs,
+    )
 
 
 def _schedule_deliveries(attempt_ids: list[uuid.UUID]) -> None:
@@ -50,8 +60,12 @@ def _schedule_deliveries(attempt_ids: list[uuid.UUID]) -> None:
     after the database transaction has committed.
     """
     loop = asyncio.get_running_loop()
+    trace_id = get_trace_id() or ""
     for attempt_id in attempt_ids:
-        loop.run_in_executor(None, _enqueue_delivery, str(attempt_id))
+        loop.run_in_executor(
+            None,
+            partial(_enqueue_delivery, str(attempt_id), trace_id),
+        )
 
 
 def _matching_endpoints_stmt(tenant_id: uuid.UUID, event_type: str) -> Select[tuple[WebhookEndpoint]]:
@@ -98,7 +112,17 @@ async def dispatch_event(
     cached_event_id = await redis.get(redis_key)
     if cached_event_id:
         elapsed_ms = (time.perf_counter() - started) * 1000
-        logger.info("Idempotent hit for %s in %.2fms", idempotency_key, elapsed_ms)
+        record_ingest(result="duplicate", elapsed_ms=elapsed_ms, over_budget=False)
+        logger.info(
+            "Idempotent hit for %s in %.2fms",
+            idempotency_key,
+            elapsed_ms,
+            extra={
+                "event": "ingest.duplicate",
+                "elapsed_ms": round(elapsed_ms, 3),
+                "event_id": str(cached_event_id),
+            },
+        )
         return DispatchResult(
             event_id=uuid.UUID(str(cached_event_id)),
             duplicate=True,
@@ -111,6 +135,8 @@ async def dispatch_event(
         rate_per_sec=settings.ingest_rate_limit_per_sec,
     )
     if not ingest_limit.allowed:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        record_ingest(result="rate_limited", elapsed_ms=elapsed_ms, over_budget=False)
         raise RateLimitExceeded(retry_after=ingest_limit.retry_after, scope="ingest")
 
     event = WebhookEvent(
@@ -129,6 +155,8 @@ async def dispatch_event(
         if existing is None:
             raise
         await redis.set(redis_key, str(existing.id), ex=IDEMPOTENCY_TTL_SECONDS)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        record_ingest(result="duplicate", elapsed_ms=elapsed_ms, over_budget=False)
         return DispatchResult(event_id=existing.id, duplicate=True, attempt_ids=[])
 
     endpoint_result = await session.execute(_matching_endpoints_stmt(tenant_id, event_type))
@@ -153,13 +181,24 @@ async def dispatch_event(
         _schedule_deliveries(attempt_ids)
 
     elapsed_ms = (time.perf_counter() - started) * 1000
-    if elapsed_ms > DISPATCH_BUDGET_MS:
+    over_budget = elapsed_ms > DISPATCH_BUDGET_MS
+    record_ingest(result="accepted", elapsed_ms=elapsed_ms, over_budget=over_budget)
+    log_extra = {
+        "event": "ingest.accepted",
+        "elapsed_ms": round(elapsed_ms, 3),
+        "event_id": str(event.id),
+        "attempt_count": len(attempt_ids),
+        "over_budget": over_budget,
+        "budget_ms": DISPATCH_BUDGET_MS,
+    }
+    if over_budget:
         logger.warning(
             "Dispatch exceeded %.1fms budget (%.2fms) event=%s attempts=%s",
             DISPATCH_BUDGET_MS,
             elapsed_ms,
             event.id,
             len(attempt_ids),
+            extra=log_extra,
         )
     else:
         logger.info(
@@ -167,6 +206,7 @@ async def dispatch_event(
             event.id,
             len(attempt_ids),
             elapsed_ms,
+            extra=log_extra,
         )
 
     return DispatchResult(event_id=event.id, duplicate=False, attempt_ids=attempt_ids)

@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–4 are done.** Phase 5 is in progress: token-bucket limiting, plus endpoint pause/disable (`PATCH`) and delivery `?status=` filters.
+**Phases 0–4 are done.** Phase 5 is in progress: token-bucket limiting, endpoint pause/disable, and observability (JSON logs, correlation ids, `GET /metrics`).
 
-**Not done yet (relative to the product intent):** observability/tracing, worker replicas and latency benchmarks, and the operator UI.
+**Not done yet (relative to the product intent):** worker replicas and latency benchmarks, and the operator UI.
 
-**Next recommended work:** finish Phase 5 (metrics, worker replicas, benchmarks) or start Phase 6 (console with `Authorization: Bearer <api_key>`).
+**Next recommended work:** finish Phase 5 (Compose worker replicas and throughput benchmarks) or start Phase 6 (console with `Authorization: Bearer <api_key>`).
 
 ---
 
@@ -39,7 +39,7 @@ The contract we are building toward:
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
 | 4 | Alembic migrations, automated tests, tenant auth | Done |
-| 5 | Token-bucket rate limiting, observability, scale benchmarks | In progress (token bucket) |
+| 5 | Token-bucket rate limiting, observability, scale benchmarks | In progress (token bucket, lifecycle, observability) |
 | 6 | Operator console (Vite + React + TypeScript) | Not started |
 
 ### Mapping to the original description
@@ -56,6 +56,7 @@ The contract we are building toward:
 | Horizontal worker scale + latency benchmarks | **Not built** |
 | Operator console | **Planned (Phase 6)** |
 | Real multi-tenant auth | Built (`POST /api/v1/tenants`, `Authorization: Bearer rfk_...`) |
+| Observability | Built (JSON logs, `X-Request-ID` / `X-Trace-Id`, `GET /metrics`) |
 
 ---
 
@@ -98,7 +99,7 @@ The contract we are building toward:
 
 - **Done:** Redis token bucket. Ingest is limited per tenant (`INGEST_RATE_LIMIT_PER_SEC`, default 50/s) with **429** and `Retry-After`. Outbound delivery is limited per endpoint (`rate_limit_per_sec`); a dry bucket defers the same PENDING attempt and does not count toward the five automatic tries.
 - **Done:** Pause/disable/resume via `PATCH /api/v1/endpoints/{id}` (`active` / `paused` / `disabled`). List endpoints and delivery logs accept `?status=`. Queued deliveries on a paused endpoint are deferred; disabled endpoints fail in-flight attempts.
-- **Next:** metrics, structured logs, tracing.
+- **Done:** JSON structured logs, request/trace correlation (`X-Request-ID`, `X-Trace-Id`, W3C `traceparent`), and Prometheus `GET /metrics` (HTTP, ingest budget, delivery outcomes in Redis).
 - **Next:** Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
 
 ### Phase 6 — Operator console (planned)
@@ -122,6 +123,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Added JSON logs, request/trace correlation, and Prometheus `GET /metrics` (HTTP, ingest, delivery).
 - Added endpoint lifecycle APIs (`GET`/`PATCH`, pause/disable) and delivery `?status=` filters.
 - Started Phase 5: Redis token-bucket ingest (per tenant, 429) and outbound delivery (per endpoint `rate_limit_per_sec`, deferred retry).
 - Replaced `X-Tenant-ID` with tenant API keys (`rfk_`, SHA-256 at rest, `Authorization: Bearer`) and Alembic revision `0002_tenants`.

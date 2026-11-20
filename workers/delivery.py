@@ -22,6 +22,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 
 from core.config import settings
+from core.metrics import increment_delivery_outcome
+from core.tracing import bind_trace_id, get_trace_id, new_trace_id
 from models import DeliveryAttempt, DeliveryStatus, EndpointStatus, WebhookEndpoint, WebhookEvent
 from services.rate_limit import endpoint_bucket_key, try_acquire
 from services.security import generate_signature
@@ -187,12 +189,18 @@ async def _defer_pending_attempt(
     delay_seconds = float(max(delay_seconds, 1.0))
     attempt.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
     await session.commit()
-    deliver_webhook_task.apply_async(args=[str(attempt.id)], countdown=delay_seconds)
+    _requeue_attempt(str(attempt.id), delay_seconds)
     logger.info(
         "Deferred attempt %s (%s); retry in %.2fs",
         attempt.id,
         reason,
         delay_seconds,
+        extra={
+            "event": "delivery.deferred",
+            "attempt_id": str(attempt.id),
+            "reason": reason,
+            "countdown_s": delay_seconds,
+        },
     )
 
 
@@ -226,15 +234,29 @@ async def _schedule_retry(
     next_attempt_id = str(next_attempt.id)
     await session.commit()
 
-    deliver_webhook_task.apply_async(
-        args=[next_attempt_id],
-        countdown=delay_seconds,
-    )
+    _requeue_attempt(next_attempt_id, delay_seconds)
     logger.info(
         "Scheduled retry attempt %s for event %s in %.2fs",
         next_attempt_id,
         attempt.event_id,
         delay_seconds,
+        extra={
+            "event": "delivery.retrying",
+            "attempt_id": str(attempt.id),
+            "next_attempt_id": next_attempt_id,
+            "event_id": str(attempt.event_id),
+            "countdown_s": delay_seconds,
+        },
+    )
+
+
+def _requeue_attempt(attempt_id: str, countdown: float) -> None:
+    trace_id = get_trace_id() or ""
+    kwargs = {"trace_id": trace_id} if trace_id else {}
+    deliver_webhook_task.apply_async(
+        args=[attempt_id],
+        kwargs=kwargs,
+        countdown=countdown,
     )
 
 
@@ -256,6 +278,7 @@ async def _deliver_webhook(attempt_id: str) -> None:
                 attempt_id,
                 attempt.status,
             )
+            await increment_delivery_outcome("skipped")
             return
 
         endpoint: WebhookEndpoint | None = attempt.endpoint
@@ -265,6 +288,7 @@ async def _deliver_webhook(attempt_id: str) -> None:
             attempt.response_body = "Missing related endpoint or event"
             await session.commit()
             logger.error("DeliveryAttempt %s is missing endpoint or event", attempt_id)
+            await increment_delivery_outcome("failed")
             return
 
         if endpoint.status == EndpointStatus.PAUSED:
@@ -274,12 +298,18 @@ async def _deliver_webhook(attempt_id: str) -> None:
                 PAUSED_ENDPOINT_DEFER_SECONDS,
                 "endpoint paused",
             )
+            await increment_delivery_outcome("deferred")
             return
         if endpoint.status == EndpointStatus.DISABLED:
             attempt.status = DeliveryStatus.FAILED
             attempt.response_body = "Endpoint is disabled"
             await session.commit()
-            logger.warning("DeliveryAttempt %s dropped; endpoint is disabled", attempt_id)
+            logger.warning(
+                "DeliveryAttempt %s dropped; endpoint is disabled",
+                attempt_id,
+                extra={"event": "delivery.disabled", "attempt_id": attempt_id},
+            )
+            await increment_delivery_outcome("disabled")
             return
 
         rate_redis = Redis.from_url(
@@ -293,12 +323,12 @@ async def _deliver_webhook(attempt_id: str) -> None:
                 key=endpoint_bucket_key(endpoint.id),
                 rate_per_sec=endpoint.rate_limit_per_sec,
             )
+            if not outbound_limit.allowed:
+                await _defer_rate_limited_attempt(session, attempt, outbound_limit.retry_after)
+                await increment_delivery_outcome("deferred", rate_redis)
+                return
         finally:
             await rate_redis.aclose()
-
-        if not outbound_limit.allowed:
-            await _defer_rate_limited_attempt(session, attempt, outbound_limit.retry_after)
-            return
 
         payload_bytes = serialize_payload(event.payload)
         outcome = await asyncio.to_thread(
@@ -323,7 +353,15 @@ async def _deliver_webhook(attempt_id: str) -> None:
                 endpoint.target_url,
                 attempt.http_status,
                 attempt.duration_ms,
+                extra={
+                    "event": "delivery.delivered",
+                    "attempt_id": attempt_id,
+                    "endpoint_id": str(endpoint.id),
+                    "http_status": attempt.http_status,
+                    "duration_ms": attempt.duration_ms,
+                },
             )
+            await increment_delivery_outcome("delivered")
             return
 
         if should_move_to_dead_letter(attempt.attempt_number):
@@ -334,13 +372,17 @@ async def _deliver_webhook(attempt_id: str) -> None:
                 "DeliveryAttempt %s exhausted %s tries; moved to dead-letter FAILED",
                 attempt_id,
                 MAX_DELIVERY_ATTEMPTS,
+                extra={"event": "delivery.failed", "attempt_id": attempt_id},
             )
+            await increment_delivery_outcome("failed")
             return
 
         await _schedule_retry(session, attempt)
+        await increment_delivery_outcome("retrying")
 
 
 @celery_app.task(name="workers.delivery.deliver_webhook_task")
-def deliver_webhook_task(attempt_id: str) -> None:
+def deliver_webhook_task(attempt_id: str, trace_id: str = "") -> None:
     """Deliver one webhook attempt and retry with Full Jitter backoff on failure."""
+    bind_trace_id(trace_id or new_trace_id())
     run_async(_deliver_webhook(attempt_id))

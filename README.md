@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–4 are complete. Phase 5 is in progress: token-bucket limiting plus endpoint pause/disable and delivery status filters. Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
+Phases 1–4 are complete. Phase 5 is in progress: token-bucket limiting, endpoint pause/disable, and observability (`GET /metrics`, JSON logs, trace ids). Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
 
 ## Stack
 
@@ -38,6 +38,7 @@ docker compose exec web pytest
 | API | http://localhost:8000 |
 | OpenAPI docs | http://localhost:8000/docs |
 | Health | http://localhost:8000/health |
+| Metrics | http://localhost:8000/metrics |
 
 Register a tenant to receive an `rfk_` API key (shown once). Business routes require `Authorization: Bearer <api_key>`.
 
@@ -46,6 +47,7 @@ Register a tenant to receive an `rfk_` API key (shown once). Business routes req
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/health` | Liveness probe |
+| GET | `/metrics` | Prometheus metrics (HTTP, ingest, delivery) |
 | POST | `/api/v1/tenants` | Create a tenant and return the API key once |
 | GET | `/api/v1/tenants/me` | Current tenant (prefix only, never the secret) |
 | POST | `/api/v1/endpoints` | Create a subscriber endpoint (`whsec_` signing secret) |
@@ -82,7 +84,7 @@ Failed deliveries retry up to 5 times with Full Jitter backoff, then move to `FA
 ```
 api/          HTTP routers
 migrations/   Alembic revision scripts
-core/         Settings and Redis
+core/         Settings, Redis, logging, metrics
 db/           Async SQLAlchemy session
 models/       ORM
 schemas/      Pydantic v2

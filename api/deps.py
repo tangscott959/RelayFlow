@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.redis import get_redis
+from core.tracing import set_tenant_id
 from db.session import get_async_session
 from models import Tenant
 from services.tenants import API_KEY_PREFIX, resolve_tenant_by_api_key
@@ -43,6 +44,7 @@ async def get_current_tenant(
     tenant = await resolve_tenant_by_api_key(session=session, raw_key=raw_key)
     if tenant is None:
         raise unauthorized
+    set_tenant_id(str(tenant.id))
     return tenant
 
 

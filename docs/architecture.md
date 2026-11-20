@@ -12,7 +12,7 @@ This document describes **what is running today**, then **what the plan adds**.
 | --- | --- | --- |
 | HTTP API | FastAPI, Pydantic v2, Bearer API keys | Unchanged |
 | ORM / DB | SQLAlchemy 2.0 async, asyncpg, PostgreSQL 16, Alembic | Unchanged |
-| Queue / cache | Celery 5.3+, Redis 7, token-bucket keys | Observability (Phase 5) |
+| Queue / cache | Celery 5.3+, Redis 7, token-bucket keys, delivery metric counters | Worker replicas + benchmarks (Phase 5) |
 | Outbound HTTP | httpx, 5s timeout, Full Jitter backoff | Unchanged |
 | Config | pydantic-settings, `.env` / `.env.example` | Unchanged |
 | UI | None (OpenAPI at `/docs`) | Vite + React + TypeScript in `frontend/` (Phase 6) |
@@ -21,16 +21,16 @@ This document describes **what is running today**, then **what the plan adds**.
 ## Layered layout (today)
 
 ```
-api/          HTTP routers and dependencies
+api/          HTTP routers, dependencies, observability middleware
 migrations/   Async Alembic env and revision scripts
-core/         Settings and Redis client
+core/         Settings, Redis, JSON logging, tracing, metrics
 db/           Async engine and session factory
 models/       SQLAlchemy 2.0 ORM
 schemas/      Pydantic v2 request/response models
 services/     Signing, tenant API keys, token bucket, and dispatch
 tests/        pytest suite
 workers/      Celery app and delivery task
-main.py       FastAPI app, CORS, /health, /api mount
+main.py       FastAPI app, CORS, /health, /metrics, /api mount
 docs/         develop_plan.md, architecture.md (committed)
 ```
 
@@ -109,6 +109,7 @@ Mounted at `/api`. `POST /api/v1/tenants` is public. All other v1 business route
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/health` | Liveness probe |
+| GET | `/metrics` | Prometheus text (HTTP, ingest, delivery) |
 | POST | `/api/v1/tenants` | Create tenant, return `rfk_` API key once |
 | GET | `/api/v1/tenants/me` | Current tenant (no secret) |
 | POST | `/api/v1/endpoints` | Create endpoint, return `whsec_` secret |
@@ -121,7 +122,7 @@ Mounted at `/api`. `POST /api/v1/tenants` is public. All other v1 business route
 
 ## Ingest path (dispatcher)
 
-Target: finish the request path within **15ms** (warning if exceeded).
+Target: finish the request path within **15ms** (warning and `relayflow_ingest_over_budget_total` if exceeded).
 
 1. Redis GET `relayflow:idempotency:{tenant_id}:{idempotency_key}` — duplicate short-circuit (TTL 24h). Duplicates do not consume ingest tokens.
 2. Take one token from `relayflow:ratelimit:ingest:{tenant_id}` (capacity = `INGEST_RATE_LIMIT_PER_SEC`). If empty, raise 429 with `Retry-After`.
@@ -129,7 +130,7 @@ Target: finish the request path within **15ms** (warning if exceeded).
 4. Load `ACTIVE` endpoints whose `subscribed_events` contain the `event_type` or `"*"`. `paused` and `disabled` endpoints are skipped for new events.
 5. Insert `delivery_attempts` with `PENDING` and `attempt_number=1`.
 6. Commit, then `SET` the Redis idempotency value to the `event_id`.
-7. Publish `workers.delivery.deliver_webhook_task` via `celery_app.send_task` on a thread pool.
+7. Publish `workers.delivery.deliver_webhook_task` via `celery_app.send_task` on a thread pool, passing the request `trace_id`.
 
 ## Delivery path (worker)
 
@@ -148,6 +149,8 @@ Target: finish the request path within **15ms** (warning if exceeded).
 Inbound verification parses `t=...,v1=...`, rejects timestamps outside 300 seconds, and uses `hmac.compare_digest`.
 
 At-least-once: a crash after POST but before commit can duplicate a delivery.
+
+JSON logs include `request_id`, `trace_id`, and `tenant_id` when bound. Responses echo `X-Request-ID` and `X-Trace-Id` (from `X-Request-ID` / W3C `traceparent`, or generated). Delivery workers increment Redis keys `relayflow:metrics:delivery:{outcome}` so `GET /metrics` can scrape every replica.
 
 ## Configuration
 
@@ -173,7 +176,6 @@ Operator console in `frontend/`:
 ## Known constraints
 
 - pytest covers HMAC signing, idempotency, Full Jitter / DLQ, API contracts, and API-key auth. Cases marked `integration` skip when PostgreSQL or Redis is not reachable.
-- Observability (metrics, tracing) is not wired yet (Phase 5).
 - Single Celery worker in Compose; no scale/latency benchmarks (Phase 5).
 - No operator UI yet (Phase 6).
 - CORS allows all origins without credentials.
