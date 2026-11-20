@@ -35,6 +35,12 @@ MAX_RESPONSE_BODY_CHARS: int = 16_384
 T = TypeVar("T")
 
 
+def should_move_to_dead_letter(attempt_number: int) -> bool:
+    """Return True when automatic retries are exhausted (DLQ / FAILED)."""
+
+    return attempt_number >= MAX_DELIVERY_ATTEMPTS
+
+
 def compute_full_jitter_delay(attempt_number: int) -> float:
     """Return a Full Jitter delay in seconds for the given attempt number.
 
@@ -256,7 +262,7 @@ async def _deliver_webhook(attempt_id: str) -> None:
             )
             return
 
-        if attempt.attempt_number >= MAX_DELIVERY_ATTEMPTS:
+        if should_move_to_dead_letter(attempt.attempt_number):
             attempt.status = DeliveryStatus.FAILED
             attempt.next_retry_at = None
             await session.commit()
