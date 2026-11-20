@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–4 are done.** Phase 5 is in progress: token-bucket limiting, endpoint pause/disable, and observability (JSON logs, correlation ids, `GET /metrics`).
+**Phases 0–5 are done.** Remaining product work is the operator console (Phase 6).
 
-**Not done yet (relative to the product intent):** worker replicas and latency benchmarks, and the operator UI.
+**Not done yet (relative to the product intent):** the operator UI.
 
-**Next recommended work:** finish Phase 5 (Compose worker replicas and throughput benchmarks) or start Phase 6 (console with `Authorization: Bearer <api_key>`).
+**Next recommended work:** Phase 6 (Vite + React + TypeScript console with `Authorization: Bearer <api_key>`).
 
 ---
 
@@ -39,7 +39,7 @@ The contract we are building toward:
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
 | 4 | Alembic migrations, automated tests, tenant auth | Done |
-| 5 | Token-bucket rate limiting, observability, scale benchmarks | In progress (token bucket, lifecycle, observability) |
+| 5 | Token-bucket rate limiting, observability, scale benchmarks | Done |
 | 6 | Operator console (Vite + React + TypeScript) | Not started |
 
 ### Mapping to the original description
@@ -50,10 +50,10 @@ The contract we are building toward:
 | Celery + Redis queue and cache | Built (broker, result backend, idempotency keys) |
 | PostgreSQL delivery state + DLQ | Built (`delivery_attempts`, `FAILED` + resend API) |
 | At-least-once + jittered exponential backoff | Built (Full Jitter, max 5 automatic tries) |
-| Docker | Built (one web, **one** worker) |
+| Docker | Built (one web, **scalable** Celery workers) |
 | HMAC signing (Svix / Stripe style) | Built (`whsec_`, `X-Agent-Signature`) |
 | Per-tenant token-bucket rate limiting | Built (ingest 429; outbound defer using `rate_limit_per_sec`) |
-| Horizontal worker scale + latency benchmarks | **Not built** |
+| Horizontal worker scale + latency benchmarks | Built (`--scale worker=N`, delayed sink, `docs/benchmarks.md`) |
 | Operator console | **Planned (Phase 6)** |
 | Real multi-tenant auth | Built (`POST /api/v1/tenants`, `Authorization: Bearer rfk_...`) |
 | Observability | Built (JSON logs, `X-Request-ID` / `X-Trace-Id`, `GET /metrics`) |
@@ -95,12 +95,12 @@ The contract we are building toward:
 - HMAC signing, idempotency, retry/DLQ, and API contract tests. Integration cases skip when PostgreSQL or Redis is not running.
 - Tenant credentials: `POST /api/v1/tenants` returns an `rfk_` API key once; business routes use `Authorization: Bearer`. Keys are stored as SHA-256 hashes. `X-Tenant-ID` is no longer accepted.
 
-### Phase 5 — Rate limiting, ops, scale (in progress)
+### Phase 5 — Rate limiting, ops, scale (done)
 
 - **Done:** Redis token bucket. Ingest is limited per tenant (`INGEST_RATE_LIMIT_PER_SEC`, default 50/s) with **429** and `Retry-After`. Outbound delivery is limited per endpoint (`rate_limit_per_sec`); a dry bucket defers the same PENDING attempt and does not count toward the five automatic tries.
 - **Done:** Pause/disable/resume via `PATCH /api/v1/endpoints/{id}` (`active` / `paused` / `disabled`). List endpoints and delivery logs accept `?status=`. Queued deliveries on a paused endpoint are deferred; disabled endpoints fail in-flight attempts.
 - **Done:** JSON structured logs, request/trace correlation (`X-Request-ID`, `X-Trace-Id`, W3C `traceparent`), and Prometheus `GET /metrics` (HTTP, ingest budget, delivery outcomes in Redis).
-- **Next:** Compose/k8s **worker replicas > 1** and throughput benchmarks under injected latency.
+- **Done:** Compose worker replicas (`docker compose up --scale worker=N`, Celery `--concurrency 1`). Delayed sink + `python -m benchmarks.run` under injected latency; see [benchmarks.md](./benchmarks.md).
 
 ### Phase 6 — Operator console (planned)
 
@@ -123,6 +123,7 @@ Newest first. Also append local `docs/changelog.md` (gitignored). Update [archit
 
 ### 2026-11-20
 
+- Added Compose worker replicas and latency benchmarks (`benchmarks/`, `docs/benchmarks.md`).
 - Added JSON logs, request/trace correlation, and Prometheus `GET /metrics` (HTTP, ingest, delivery).
 - Added endpoint lifecycle APIs (`GET`/`PATCH`, pause/disable) and delivery `?status=` filters.
 - Started Phase 5: Redis token-bucket ingest (per tenant, 429) and outbound delivery (per endpoint `rate_limit_per_sec`, deferred retry).
