@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar
 
 import httpx
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
@@ -22,6 +23,7 @@ from sqlalchemy.pool import NullPool
 
 from core.config import settings
 from models import DeliveryAttempt, DeliveryStatus, WebhookEndpoint, WebhookEvent
+from services.rate_limit import endpoint_bucket_key, try_acquire
 from services.security import generate_signature
 from workers.celery_app import celery_app
 
@@ -173,6 +175,24 @@ async def _load_attempt(session: AsyncSession, attempt_id: uuid.UUID) -> Deliver
     return result.scalar_one_or_none()
 
 
+async def _defer_rate_limited_attempt(
+    session: AsyncSession,
+    attempt: DeliveryAttempt,
+    retry_after: int,
+) -> None:
+    """Requeue the same PENDING attempt without consuming a retry toward the DLQ."""
+
+    delay_seconds = float(max(retry_after, 1))
+    attempt.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    await session.commit()
+    deliver_webhook_task.apply_async(args=[str(attempt.id)], countdown=delay_seconds)
+    logger.info(
+        "Deferred attempt %s for endpoint rate limit; retry in %.2fs",
+        attempt.id,
+        delay_seconds,
+    )
+
+
 async def _schedule_retry(
     session: AsyncSession,
     attempt: DeliveryAttempt,
@@ -234,6 +254,24 @@ async def _deliver_webhook(attempt_id: str) -> None:
             attempt.response_body = "Missing related endpoint or event"
             await session.commit()
             logger.error("DeliveryAttempt %s is missing endpoint or event", attempt_id)
+            return
+
+        rate_redis = Redis.from_url(
+            settings.redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+        try:
+            outbound_limit = await try_acquire(
+                rate_redis,
+                key=endpoint_bucket_key(endpoint.id),
+                rate_per_sec=endpoint.rate_limit_per_sec,
+            )
+        finally:
+            await rate_redis.aclose()
+
+        if not outbound_limit.allowed:
+            await _defer_rate_limited_attempt(session, attempt, outbound_limit.retry_after)
             return
 
         payload_bytes = serialize_payload(event.payload)

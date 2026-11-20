@@ -38,6 +38,12 @@ class Settings(BaseSettings):
         default=None,
         description="Celery result backend URL. Defaults to redis_url when omitted.",
     )
+    ingest_rate_limit_per_sec: int = Field(
+        default=50,
+        ge=1,
+        le=10_000,
+        description="Per-tenant ingest token-bucket rate (tokens per second).",
+    )
 
     @field_validator("database_url")
     @classmethod

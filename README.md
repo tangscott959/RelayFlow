@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–4 are complete: async data model, signed Celery delivery, HTTP API, Docker Compose, Alembic, pytest, and tenant API keys. Phase 5 is token-bucket limiting and scale benchmarks. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
+Phases 1–4 are complete. Phase 5 is in progress: Redis token-bucket limiting on ingest (per tenant) and outbound delivery (per endpoint `rate_limit_per_sec`). Worker-scale benchmarks and the operator console remain. See the [development plan](docs/develop_plan.md).
 
 ## Stack
 
@@ -100,6 +100,7 @@ Copy `.env.example`. Compose injects `postgres` / `redis` hostnames; local uvico
 | `DATABASE_URL` | PostgreSQL DSN (`postgresql+asyncpg://...`) |
 | `REDIS_URL` | Redis; default Celery broker and result backend |
 | `SECRET_KEY` | Application secret |
+| `INGEST_RATE_LIMIT_PER_SEC` | Per-tenant ingest token bucket (default 50/s) |
 
 ## Documentation
 
