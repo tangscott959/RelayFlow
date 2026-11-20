@@ -45,11 +45,12 @@ async def test_dispatch_short_circuits_on_redis_hit(memory_redis: InMemoryRedis)
 @pytest.mark.integration
 async def test_dispatch_unique_constraint_is_treated_as_duplicate(
     require_backend: None,
-    tenant_id: uuid.UUID,
+    persisted_tenant_id: uuid.UUID,
     memory_redis: InMemoryRedis,
 ) -> None:
     from db.session import AsyncSessionLocal
 
+    tenant_id = persisted_tenant_id
     idempotency_key = f"evt-{uuid.uuid4()}"
     async with AsyncSessionLocal() as session:
         existing = WebhookEvent(
@@ -81,13 +82,14 @@ async def test_dispatch_unique_constraint_is_treated_as_duplicate(
 @pytest.mark.integration
 async def test_dispatch_fans_out_to_matching_active_endpoints(
     require_backend: None,
-    tenant_id: uuid.UUID,
+    persisted_tenant_id: uuid.UUID,
     memory_redis: InMemoryRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from db.session import AsyncSessionLocal
 
     monkeypatch.setattr("services.dispatcher._schedule_deliveries", lambda attempt_ids: None)
+    tenant_id = persisted_tenant_id
 
     async with AsyncSessionLocal() as session:
         wildcard = WebhookEndpoint(
@@ -137,7 +139,7 @@ async def test_dispatch_fans_out_to_matching_active_endpoints(
 @pytest.mark.integration
 async def test_resend_dead_letter_queues_next_attempt(
     require_backend: None,
-    tenant_id: uuid.UUID,
+    persisted_tenant_id: uuid.UUID,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from db.session import AsyncSessionLocal
@@ -147,6 +149,7 @@ async def test_resend_dead_letter_queues_next_attempt(
         "services.dispatcher._schedule_deliveries",
         lambda attempt_ids: scheduled.extend(attempt_ids),
     )
+    tenant_id = persisted_tenant_id
 
     async with AsyncSessionLocal() as session:
         endpoint = WebhookEndpoint(

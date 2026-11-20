@@ -4,7 +4,7 @@ Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber 
 
 ## Status
 
-Phases 1–3 are complete. Phase 4 is in progress: Alembic applies the schema before the API starts, and pytest covers signing, idempotency, retry/DLQ, and API contracts. Tenant credentials are next. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
+Phases 1–4 are complete: async data model, signed Celery delivery, HTTP API, Docker Compose, Alembic, pytest, and tenant API keys. Phase 5 is token-bucket limiting and scale benchmarks. A React + TypeScript operator console is planned as Phase 6 (see the [development plan](docs/develop_plan.md)).
 
 ## Stack
 
@@ -39,25 +39,31 @@ docker compose exec web pytest
 | OpenAPI docs | http://localhost:8000/docs |
 | Health | http://localhost:8000/health |
 
-Business routes require header `X-Tenant-ID` (UUID).
+Register a tenant to receive an `rfk_` API key (shown once). Business routes require `Authorization: Bearer <api_key>`.
 
 ## API
 
 | Method | Path | Description |
 | --- | --- | --- |
 | GET | `/health` | Liveness probe |
+| POST | `/api/v1/tenants` | Create a tenant and return the API key once |
+| GET | `/api/v1/tenants/me` | Current tenant (prefix only, never the secret) |
 | POST | `/api/v1/endpoints` | Create a subscriber endpoint (`whsec_` signing secret) |
 | GET | `/api/v1/endpoints` | List endpoints for the tenant |
 | POST | `/api/v1/events` | Ingest an event (**202 Accepted**) |
 | GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log |
 | POST | `/api/v1/deliveries/{attempt_id}/resend` | Requeue a `FAILED` (dead-letter) attempt |
 
-Example ingest:
+Example:
 
 ```bash
+curl -s -X POST http://localhost:8000/api/v1/tenants \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"acme\"}"
+
 curl -X POST http://localhost:8000/api/v1/events \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+  -H "Authorization: Bearer rfk_YOUR_KEY" \
   -d "{\"event_type\":\"agent.completed\",\"idempotency_key\":\"evt-1\",\"payload\":{\"ok\":true}}"
 ```
 
