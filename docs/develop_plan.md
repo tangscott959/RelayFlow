@@ -1,6 +1,6 @@
 # RelayFlow Development Plan
 
-Last updated: 2026-10-17
+Last updated: 2026-11-20
 
 ## Product intent
 
@@ -22,11 +22,11 @@ The contract we are building toward:
 
 ## Current status
 
-**Phases 0–3 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker (web, one worker, PostgreSQL 16, Redis 7).
+**Phases 0–3 are done.** The ingest → queue → signed POST → retry / DLQ spine runs locally in Docker (web, one worker, PostgreSQL 16, Redis 7). **Phase 4 is in progress:** Alembic replaces `create_all`, and HMAC signing has unit tests.
 
-**Not done yet (relative to the product intent):** token-bucket limiting, real tenant auth, Alembic, automated tests, multi-worker scale tests, and the operator UI.
+**Not done yet (relative to the product intent):** remaining API/idempotency/retry tests, real tenant auth, token-bucket limiting, multi-worker scale tests, and the operator UI.
 
-**Next recommended work:** Phase 4 (migrations, tests, tenant authentication). Phase 6 (console) can start against `/api/v1` with `X-Tenant-ID` if we want UI earlier; prefer it after Phase 4 if the console should use real credentials.
+**Next recommended work:** finish Phase 4 (API/idempotency/retry tests, then tenant credentials). Phase 6 (console) can start against `/api/v1` with `X-Tenant-ID` if we want UI earlier; prefer it after Phase 4 if the console should use real credentials.
 
 ---
 
@@ -38,7 +38,7 @@ The contract we are building toward:
 | 1 | Config, async DB session, core ORM models | Done |
 | 2 | HMAC signing + Celery delivery worker | Done |
 | 3 | HTTP API, dispatcher, Docker Compose | Done |
-| 4 | Alembic migrations, automated tests, tenant auth | Not started |
+| 4 | Alembic migrations, automated tests, tenant auth | In progress (Alembic + signing tests) |
 | 5 | Token-bucket rate limiting, observability, scale benchmarks | Not started |
 | 6 | Operator console (Vite + React + TypeScript) | Not started |
 
@@ -88,11 +88,12 @@ The contract we are building toward:
 - REST under `/api/v1`, plus `/health`.
 - Multi-stage `Dockerfile` and Compose: `web`, `worker`, `postgres`, `redis`.
 
-### Phase 4 — Hardening (next)
+### Phase 4 — Hardening (in progress)
 
-- Alembic instead of `create_all` on startup.
-- Tests: signing, idempotency, retry/DLQ, API contracts.
-- Replace header-only `X-Tenant-ID` with tenant credentials (tokens or equivalent).
+- **Done:** Alembic instead of `create_all` on startup. Compose `web` runs `alembic upgrade head` before uvicorn. Scripts live in `migrations/` (not `alembic/`, which would shadow the Alembic package under `PYTHONPATH=/app`). Initial revision `0001_initial` creates the three tables and PostgreSQL enums.
+- **Done:** HMAC signing unit tests (`tests/test_security.py`).
+- **Next:** tests for idempotency, retry/DLQ, and API contracts.
+- **Next:** replace header-only `X-Tenant-ID` with tenant credentials (tokens or equivalent).
 
 ### Phase 5 — Rate limiting, ops, scale (later)
 
@@ -119,6 +120,11 @@ Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. MV
 ## Progress log
 
 Newest first. Also append local `docs/changelog.md` (gitignored). Update [architecture.md](./architecture.md) when layout or data flow changes.
+
+### 2026-11-20
+
+- Started Phase 4: Alembic async migrations (`migrations/` + `0001_initial`), removed `create_all` from FastAPI lifespan, Compose applies `alembic upgrade head` before uvicorn.
+- Added pytest and HMAC signing unit tests.
 
 ### 2026-10-17
 
