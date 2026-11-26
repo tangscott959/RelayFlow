@@ -14,25 +14,62 @@ Phases 1–6 are complete. The operator console is at http://localhost:5173. See
 
 ## Quick start
 
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose). Then:
+
 ```bash
-cp .env.example .env
+git clone https://github.com/tangscott959/RelayFlow.git
+cd RelayFlow
 docker compose up --build
-# Horizontal workers (one Celery process per replica):
+```
+
+Compose does not need a `.env` file. Wait until http://localhost:8000/health returns `{"status":"ok",...}`, then either:
+
+**Console (easiest):** open http://localhost:5173 → Create tenant → Endpoints → Ingest → Deliveries.
+
+**curl:** copy `api_key` from the first response (`rfk_...`). `subscribed_events` must include `"*"` or the event type, or nothing is delivered.
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/tenants \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"acme\"}"
+
+curl -s -X POST http://localhost:8000/api/v1/endpoints \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer rfk_YOUR_KEY" \
+  -d "{\"target_url\":\"https://example.com/hooks\",\"subscribed_events\":[\"*\"]}"
+
+curl -s -X POST http://localhost:8000/api/v1/events \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer rfk_YOUR_KEY" \
+  -d "{\"event_type\":\"agent.completed\",\"idempotency_key\":\"evt-1\",\"payload\":{\"ok\":true}}"
+```
+
+`https://example.com/hooks` returns 405, so deliveries go `retrying` then `FAILED`. That is expected. Use a [webhook.site](https://webhook.site) URL if you want `DELIVERED` and the HMAC headers.
+
+Scale workers:
+
+```bash
 docker compose up -d --scale worker=3
 ```
 
-The `web` service runs `alembic upgrade head` before uvicorn. If you already used an older stack that created tables with `create_all`, reset the volume (`docker compose down -v`) or stamp the current revision:
+The `web` service runs `alembic upgrade head` before uvicorn. If an older volume was created with `create_all`, reset it (`docker compose down -v`) or stamp:
 
 ```bash
 docker compose exec web alembic stamp head
 ```
 
-Run tests. HMAC and HTTP contract tests run anywhere. Cases marked `integration` need PostgreSQL and Redis (the Compose service network). If a local Postgres already occupies port 5432, run the suite inside `web`:
+On Windows, a host Postgres on port 5432 can hide the Compose database. Prefer tests inside the container:
 
 ```bash
+docker compose exec web pytest
+```
+
+Host tests (HMAC / HTTP contracts only, unless you point `.env` at a real Postgres and Redis):
+
+```bash
+cp .env.example .env
 pip install -r requirements.txt
 pytest
-docker compose exec web pytest
 ```
 
 | Service | URL |
@@ -62,18 +99,7 @@ Register a tenant to receive an `rfk_` API key (shown once). Business routes req
 | GET | `/api/v1/endpoints/{endpoint_id}/deliveries` | Paginated delivery log (`?status=` optional) |
 | POST | `/api/v1/deliveries/{attempt_id}/resend` | Requeue a `FAILED` (dead-letter) attempt |
 
-Example:
-
-```bash
-curl -s -X POST http://localhost:8000/api/v1/tenants \
-  -H "Content-Type: application/json" \
-  -d "{\"name\":\"acme\"}"
-
-curl -X POST http://localhost:8000/api/v1/events \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer rfk_YOUR_KEY" \
-  -d "{\"event_type\":\"agent.completed\",\"idempotency_key\":\"evt-1\",\"payload\":{\"ok\":true}}"
-```
+A full tenant → endpoint → ingest sequence is in Quick start.
 
 Matching `ACTIVE` endpoints receive a POST with:
 
