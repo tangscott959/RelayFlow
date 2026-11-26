@@ -1,6 +1,6 @@
 # RelayFlow Development Plan
 
-Last updated: 2026-11-20
+Last updated: 2026-11-26
 
 ## Product intent
 
@@ -121,6 +121,10 @@ Integration: Compose service `frontend` (port 5173) proxying `/api` to `web`. Th
 ## Progress log
 
 Newest first. Also append local `docs/changelog.md` (gitignored). Update [architecture.md](./architecture.md) when layout or data flow changes.
+
+### 2026-11-26
+
+- Named the solo author (Xingxuan Tang) in `README.md`.
 
 ### 2026-11-20
 

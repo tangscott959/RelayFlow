@@ -2,6 +2,8 @@
 
 Multi-tenant webhook relay for Agent events. Ingest once, fan out to subscriber endpoints with HMAC-SHA256 signatures, retries, and a dead-letter path.
 
+**Team:** Xingxuan Tang (solo).
+
 ## Status
 
 Phases 1–6 are complete. The operator console is at http://localhost:5173. See the [development plan](docs/develop_plan.md).
